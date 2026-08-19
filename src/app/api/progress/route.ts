@@ -21,6 +21,13 @@ export const POST = withApi(async (req: NextRequest) => {
   const entry = await prisma.progressEntry.create({
     data: { ...data, status: "submitted", createdById: ctx.userId },
   });
+
+  // Keep forecasts + contractor-delay flags current with every new figure.
+  const { recomputeForecasts } = await import("@/lib/schedule/service");
+  await recomputeForecasts(data.siteId).catch((err) =>
+    console.error("forecast recompute failed", err)
+  );
+
   return NextResponse.json({ entry }, { status: 201 });
 });
 

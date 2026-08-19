@@ -1,0 +1,828 @@
+// Construction ERP — data model.
+//
+// Versioning pattern (applies to every model marked "VERSIONED"):
+// a business record is identified by `entityId`; each submission/amendment is a
+// new row with version n+1. Postgres triggers (see the immutability_triggers
+// migration) reject UPDATE/DELETE on submitted rows, so history is enforced by
+// the database, not the app. References BETWEEN records always point at
+// `entityId` (logical identity), never at a version row id.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Enums ----------
+
+enum Role {
+  engineer
+  accounts
+  // Phase 2 roles — reserved now so site_roles never needs a schema change:
+  purchase
+  billing_engineer
+}
+
+enum RecordStatus {
+  draft
+  submitted
+  superseded
+}
+
+enum RecordType {
+  progress_entry
+  measurement_book
+  material_receipt
+  consumption_entry
+  requisition
+  labour_entry
+}
+
+enum AmendmentWindow {
+  until_day_close
+  until_actioned
+  same_day
+  never
+}
+
+enum AmendmentActor {
+  author
+  owner
+}
+
+enum Unit {
+  CUM
+  SQM
+  MTR
+  BAG
+  NOS
+  KG
+  TON
+}
+
+enum SiteStatus {
+  active
+  on_hold
+  completed
+}
+
+enum ActivityCategory {
+  earthwork
+  concreting
+  masonry
+  plaster
+  waterproofing
+  flooring
+  finishes
+  external
+  general
+}
+
+enum ExecutorType {
+  dept
+  contractor
+}
+
+enum PhotoKind {
+  progress
+  receipt
+  scan_frame
+}
+
+enum ParseStatus {
+  pending
+  parsed
+  failed
+}
+
+enum MaterialCategory {
+  cement
+  sand
+  aggregate
+  brick
+  steel
+  other
+}
+
+enum ScanMethod {
+  photogrammetry
+  lidar
+  template
+}
+
+enum ScanStatus {
+  capturing
+  queued
+  processing
+  computed
+  accepted
+  rejected
+  failed
+}
+
+enum JobState {
+  queued
+  running
+  done
+  failed
+}
+
+enum ScanDecisionType {
+  accepted
+  rejected
+}
+
+enum RequisitionKind {
+  material
+  fund
+}
+
+enum ApprovalActionType {
+  approved
+  partially_approved
+  rejected
+  queried
+  queued
+}
+
+enum LabourEntryType {
+  day_rate
+  period
+}
+
+enum LabourSource {
+  morning_market
+  contractor
+}
+
+enum RateBasis {
+  per_day
+  per_unit
+}
+
+enum AuditRule {
+  consumption_variance
+  labour_cost_over_benchmark
+  contractor_delay
+  scan_variance
+  receipt_requisition_mismatch
+  ai_progress_discrepancy
+}
+
+enum FlagSeverity {
+  info
+  warn
+  critical
+}
+
+enum FlagStatus {
+  open
+  acknowledged
+  resolved
+}
+
+// ---------- Auth & RBAC ----------
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  name         String
+  email        String   @unique
+  phone        String?  @unique
+  passwordHash String
+  isOwner      Boolean  @default(false)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  siteRoles SiteRole[]
+
+  @@map("users")
+}
+
+model SiteRole {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @db.Uuid
+  siteId String @db.Uuid
+  role   Role
+
+  user User @relation(fields: [userId], references: [id])
+  site Site @relation(fields: [siteId], references: [id])
+
+  @@unique([userId, siteId])
+  @@index([siteId])
+  @@map("site_roles")
+}
+
+// ---------- Sites & WBS ----------
+
+model Site {
+  id        String     @id @default(uuid()) @db.Uuid
+  name      String
+  code      String     @unique
+  location  String?
+  geoLat    Float?
+  geoLng    Float?
+  startDate DateTime?  @db.Date
+  status    SiteStatus @default(active)
+  createdAt DateTime   @default(now())
+
+  siteRoles  SiteRole[]
+  activities Activity[]
+
+  @@map("sites")
+}
+
+model Activity {
+  id                        String           @id @default(uuid()) @db.Uuid
+  siteId                    String           @db.Uuid
+  code                      String
+  name                      String
+  parentId                  String?          @db.Uuid
+  category                  ActivityCategory @default(general)
+  boqQty                    Decimal?         @db.Decimal(14, 3)
+  unit                      Unit?
+  productivityNormQtyPerDay Decimal?         @db.Decimal(14, 3)
+  sequence                  Int              @default(0)
+  contractorName            String?
+  // Phase 2 (purchase dept) — reserved, unused in Phase 1:
+  boqRate                   Decimal?         @db.Decimal(14, 2)
+
+  site   Site       @relation(fields: [siteId], references: [id])
+  parent Activity?  @relation("wbs", fields: [parentId], references: [id])
+  kids   Activity[] @relation("wbs")
+
+  predecessors ActivityDependency[] @relation("successor")
+  successors   ActivityDependency[] @relation("predecessor")
+
+  @@unique([siteId, code])
+  @@index([siteId, sequence])
+  @@map("activities")
+}
+
+model ActivityDependency {
+  id            String @id @default(uuid()) @db.Uuid
+  predecessorId String @db.Uuid
+  successorId   String @db.Uuid
+  lagDays       Int    @default(0)
+
+  predecessor Activity @relation("predecessor", fields: [predecessorId], references: [id])
+  successor   Activity @relation("successor", fields: [successorId], references: [id])
+
+  @@unique([predecessorId, successorId])
+  @@map("activity_dependencies")
+}
+
+// ---------- Schedule / Gantt ----------
+
+model ScheduleSuggestion {
+  id          String   @id @default(uuid()) @db.Uuid
+  siteId      String   @db.Uuid
+  generatedAt DateTime @default(now())
+  params      Json
+
+  dates SuggestedDate[]
+
+  @@index([siteId, generatedAt])
+  @@map("schedule_suggestions")
+}
+
+model SuggestedDate {
+  id              String   @id @default(uuid()) @db.Uuid
+  suggestionId    String   @db.Uuid
+  activityId      String   @db.Uuid
+  suggStart       DateTime @db.Date
+  suggEnd         DateTime @db.Date
+  monsoonAffected Boolean  @default(false)
+  multiplier      Decimal  @default(1) @db.Decimal(5, 2)
+
+  suggestion ScheduleSuggestion @relation(fields: [suggestionId], references: [id])
+
+  @@unique([suggestionId, activityId])
+  @@map("suggested_dates")
+}
+
+// Locking a baseline is an INSERT; there is no update path at all.
+model Baseline {
+  id         String   @id @default(uuid()) @db.Uuid
+  siteId     String   @db.Uuid
+  version    Int
+  lockedById String   @db.Uuid
+  lockedAt   DateTime @default(now())
+  note       String?
+
+  activities BaselineActivity[]
+
+  @@unique([siteId, version])
+  @@map("baselines")
+}
+
+model BaselineActivity {
+  id           String   @id @default(uuid()) @db.Uuid
+  baselineId   String   @db.Uuid
+  activityId   String   @db.Uuid
+  plannedStart DateTime @db.Date
+  plannedEnd   DateTime @db.Date
+  plannedQty   Decimal? @db.Decimal(14, 3)
+
+  baseline Baseline @relation(fields: [baselineId], references: [id])
+
+  @@unique([baselineId, activityId])
+  @@map("baseline_activities")
+}
+
+// Derived data, recomputed by the worker — latest row wins per activity.
+model ActivityForecast {
+  id          String    @id @default(uuid()) @db.Uuid
+  activityId  String    @unique @db.Uuid
+  forecastEnd DateTime? @db.Date
+  slipPct     Decimal?  @db.Decimal(7, 2)
+  computedAt  DateTime  @default(now())
+
+  @@map("activity_forecasts")
+}
+
+// ---------- Progress ----------
+
+// VERSIONED
+model ProgressEntry {
+  id              String       @id @default(uuid()) @db.Uuid
+  entityId        String       @default(uuid()) @db.Uuid
+  version         Int          @default(1)
+  isCurrent       Boolean      @default(true)
+  status          RecordStatus @default(draft)
+  createdById     String       @db.Uuid
+  createdAt       DateTime     @default(now())
+  amendmentReason String?
+  amendedFromId   String?      @db.Uuid
+
+  siteId         String       @db.Uuid
+  activityId     String       @db.Uuid
+  entryDate      DateTime     @db.Date
+  qtyDone        Decimal      @db.Decimal(14, 3)
+  unit           Unit
+  executedBy     ExecutorType
+  contractorName String?
+  notes          String?
+
+  @@index([siteId, entryDate])
+  @@index([entityId])
+  @@index([activityId, isCurrent])
+  @@map("progress_entries")
+}
+
+// Photos are never edited or deleted — only superseded with a reason.
+model Photo {
+  id                 String    @id @default(uuid()) @db.Uuid
+  siteId             String    @db.Uuid
+  activityId         String?   @db.Uuid
+  storageKey         String
+  originalName       String?
+  takenAt            DateTime?
+  geoLat             Float?
+  geoLng             Float?
+  geoAccuracy        Float?
+  uploadedById       String    @db.Uuid
+  kind               PhotoKind
+  supersededReason   String?
+  supersededById     String?   @db.Uuid
+  supersededAt       DateTime?
+  createdAt          DateTime  @default(now())
+
+  @@index([siteId, kind, createdAt])
+  @@map("photos")
+}
+
+model AiProgressEstimate {
+  id          String   @id @default(uuid()) @db.Uuid
+  siteId      String   @db.Uuid
+  activityId  String   @db.Uuid
+  photoIds    String[] @db.Uuid
+  estimatePct Decimal  @db.Decimal(5, 2)
+  model       String
+  rationale   String
+  confidence  Decimal  @db.Decimal(4, 3)
+  createdAt   DateTime @default(now())
+  flagId      String?  @db.Uuid
+
+  @@index([activityId, createdAt])
+  @@map("ai_progress_estimates")
+}
+
+// VERSIONED — a re-upload is a new version of the same (site, date) book.
+model MeasurementBook {
+  id              String       @id @default(uuid()) @db.Uuid
+  entityId        String       @default(uuid()) @db.Uuid
+  version         Int          @default(1)
+  isCurrent       Boolean      @default(true)
+  status          RecordStatus @default(draft)
+  createdById     String       @db.Uuid
+  createdAt       DateTime     @default(now())
+  amendmentReason String?
+  amendedFromId   String?      @db.Uuid
+
+  siteId      String      @db.Uuid
+  mbDate      DateTime    @db.Date
+  sheetNo     String
+  storageKey  String
+  parseStatus ParseStatus @default(pending)
+  rowErrors   Json?
+
+  lines MbLine[]
+
+  @@index([siteId, mbDate])
+  @@index([entityId])
+  @@map("measurement_books")
+}
+
+// Lines belong to one measurement-book VERSION row and are immutable with it.
+model MbLine {
+  id                String   @id @default(uuid()) @db.Uuid
+  measurementBookId String   @db.Uuid
+  srNo              Int
+  lineDate          DateTime @db.Date
+  activityCode      String
+  description       String
+  location          String?
+  nos               Decimal  @db.Decimal(14, 3)
+  length            Decimal? @db.Decimal(14, 3)
+  breadth           Decimal? @db.Decimal(14, 3)
+  depth             Decimal? @db.Decimal(14, 3)
+  qty               Decimal  @db.Decimal(14, 3)
+  unit              Unit
+  executedBy        String
+  remarks           String?
+
+  measurementBook MeasurementBook @relation(fields: [measurementBookId], references: [id])
+
+  @@index([measurementBookId])
+  @@map("mb_lines")
+}
+
+// ---------- Inventory ----------
+
+model Material {
+  id              String           @id @default(uuid()) @db.Uuid
+  name            String           @unique
+  unit            Unit
+  category        MaterialCategory
+  spec            String?
+  // For stockpile scans: convert measured volume to stock quantity.
+  densityKgPerCum Decimal?         @db.Decimal(10, 2)
+  unitsPerCum     Decimal?         @db.Decimal(10, 2)
+  active          Boolean          @default(true)
+
+  @@map("materials")
+}
+
+model MixDesign {
+  id         String @id @default(uuid()) @db.Uuid
+  code       String @unique
+  name       String
+  outputUnit Unit   @default(CUM)
+
+  coefficients MixDesignCoefficient[]
+
+  @@map("mix_designs")
+}
+
+model MixDesignCoefficient {
+  id         String  @id @default(uuid()) @db.Uuid
+  mixId      String  @db.Uuid
+  materialId String  @db.Uuid
+  qtyPerUnit Decimal @db.Decimal(12, 4)
+
+  mix MixDesign @relation(fields: [mixId], references: [id])
+
+  @@unique([mixId, materialId])
+  @@map("mix_design_coefficients")
+}
+
+// VERSIONED
+model MaterialReceipt {
+  id              String       @id @default(uuid()) @db.Uuid
+  entityId        String       @default(uuid()) @db.Uuid
+  version         Int          @default(1)
+  isCurrent       Boolean      @default(true)
+  status          RecordStatus @default(draft)
+  createdById     String       @db.Uuid
+  createdAt       DateTime     @default(now())
+  amendmentReason String?
+  amendedFromId   String?      @db.Uuid
+
+  siteId              String   @db.Uuid
+  materialId          String   @db.Uuid
+  qty                 Decimal  @db.Decimal(14, 3)
+  unit                Unit
+  supplier            String
+  challanNo           String
+  qualityAdequate     Boolean
+  qualityRemarks      String?
+  photoIds            String[] @db.Uuid
+  requisitionEntityId String?  @db.Uuid
+  receivedDate        DateTime @db.Date
+
+  @@index([siteId, receivedDate])
+  @@index([entityId])
+  @@map("material_receipts")
+}
+
+// VERSIONED
+model ConsumptionEntry {
+  id              String       @id @default(uuid()) @db.Uuid
+  entityId        String       @default(uuid()) @db.Uuid
+  version         Int          @default(1)
+  isCurrent       Boolean      @default(true)
+  status          RecordStatus @default(draft)
+  createdById     String       @db.Uuid
+  createdAt       DateTime     @default(now())
+  amendmentReason String?
+  amendedFromId   String?      @db.Uuid
+
+  siteId      String   @db.Uuid
+  materialId  String   @db.Uuid
+  activityId  String   @db.Uuid
+  mixDesignId String?  @db.Uuid
+  qty         Decimal  @db.Decimal(14, 3)
+  entryDate   DateTime @db.Date
+
+  @@index([siteId, entryDate])
+  @@index([entityId])
+  @@index([activityId, isCurrent])
+  @@map("consumption_entries")
+}
+
+// ---------- Stockpile scans ----------
+// Scan lifecycle rows are append-only state transitions; a wrong scan is
+// answered by a new scan, never by editing.
+
+model StockpileScan {
+  id           String     @id @default(uuid()) @db.Uuid
+  siteId       String     @db.Uuid
+  materialId   String     @db.Uuid
+  method       ScanMethod
+  status       ScanStatus @default(capturing)
+  markerSizeMm Int?
+  createdById  String     @db.Uuid
+  createdAt    DateTime   @default(now())
+
+  frames   ScanFrame[]
+  job      ScanJob?
+  result   ScanResult?
+  decision ScanDecision?
+
+  @@index([siteId, createdAt])
+  @@map("stockpile_scans")
+}
+
+model ScanFrame {
+  id       String @id @default(uuid()) @db.Uuid
+  scanId   String @db.Uuid
+  photoId  String @db.Uuid
+  sequence Int
+
+  scan StockpileScan @relation(fields: [scanId], references: [id])
+
+  @@unique([scanId, sequence])
+  @@map("scan_frames")
+}
+
+// Polled by the Python worker with FOR UPDATE SKIP LOCKED.
+model ScanJob {
+  id       String    @id @default(uuid()) @db.Uuid
+  scanId   String    @unique @db.Uuid
+  state    JobState  @default(queued)
+  lockedAt DateTime?
+  attempts Int       @default(0)
+  result   Json?
+  error    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  scan StockpileScan @relation(fields: [scanId], references: [id])
+
+  @@index([state, createdAt])
+  @@map("scan_jobs")
+}
+
+model ScanResult {
+  id                String     @id @default(uuid()) @db.Uuid
+  scanId            String     @unique @db.Uuid
+  computedVolumeCum Decimal?   @db.Decimal(12, 3)
+  computedQty       Decimal?   @db.Decimal(14, 3)
+  qtyUnit           Unit
+  confidence        Decimal?   @db.Decimal(4, 3)
+  methodUsed        ScanMethod
+  markerDetected    Boolean    @default(false)
+  registeredFrames  Int        @default(0)
+  meshStorageKey    String?
+  createdAt         DateTime   @default(now())
+
+  scan StockpileScan @relation(fields: [scanId], references: [id])
+
+  @@map("scan_results")
+}
+
+// One-shot and immutable: the accept/reject variance IS the audit signal.
+model ScanDecision {
+  id          String           @id @default(uuid()) @db.Uuid
+  scanId      String           @unique @db.Uuid
+  decision    ScanDecisionType
+  engineerQty Decimal?         @db.Decimal(14, 3)
+  variancePct Decimal?         @db.Decimal(7, 2)
+  decidedById String           @db.Uuid
+  decidedAt   DateTime         @default(now())
+
+  scan StockpileScan @relation(fields: [scanId], references: [id])
+
+  @@map("scan_decisions")
+}
+
+// ---------- Requisitions & approvals ----------
+
+// VERSIONED. lines: material → [{materialId, qty, unit}], fund → [{head, amount}]
+model Requisition {
+  id              String       @id @default(uuid()) @db.Uuid
+  entityId        String       @default(uuid()) @db.Uuid
+  version         Int          @default(1)
+  isCurrent       Boolean      @default(true)
+  status          RecordStatus @default(draft)
+  createdById     String       @db.Uuid
+  createdAt       DateTime     @default(now())
+  amendmentReason String?
+  amendedFromId   String?      @db.Uuid
+
+  siteId        String          @db.Uuid
+  kind          RequisitionKind
+  lines         Json
+  amountTotal   Decimal?        @db.Decimal(14, 2)
+  neededBy      DateTime?       @db.Date
+  justification String
+
+  @@index([siteId, kind, createdAt])
+  @@index([entityId])
+  @@map("requisitions")
+}
+
+// Append-only decision log; the latest action is the requisition's state.
+// A correction is a NEW action with a mandatory reason, never an edit.
+model ApprovalAction {
+  id                  String             @id @default(uuid()) @db.Uuid
+  requisitionEntityId String             @db.Uuid
+  action              ApprovalActionType
+  approvedAmount      Decimal?           @db.Decimal(14, 2)
+  reason              String?
+  actorId             String             @db.Uuid
+  createdAt           DateTime           @default(now())
+
+  @@index([requisitionEntityId, createdAt])
+  @@map("approval_actions")
+}
+
+// ---------- Departmental labour ----------
+
+model WorkType {
+  id          String @id @default(uuid()) @db.Uuid
+  name        String @unique
+  defaultUnit Unit
+
+  @@map("work_types")
+}
+
+// VERSIONED
+model LabourEntry {
+  id              String       @id @default(uuid()) @db.Uuid
+  entityId        String       @default(uuid()) @db.Uuid
+  version         Int          @default(1)
+  isCurrent       Boolean      @default(true)
+  status          RecordStatus @default(draft)
+  createdById     String       @db.Uuid
+  createdAt       DateTime     @default(now())
+  amendmentReason String?
+  amendedFromId   String?      @db.Uuid
+
+  siteId         String          @db.Uuid
+  entryType      LabourEntryType
+  source         LabourSource
+  contractorName String?
+  workTypeId     String          @db.Uuid
+  workersCount   Int
+  rate           Decimal         @db.Decimal(12, 2)
+  rateBasis      RateBasis
+  outputQty      Decimal?        @db.Decimal(14, 3)
+  outputUnit     Unit?
+  entryDate      DateTime?       @db.Date
+  periodStart    DateTime?       @db.Date
+  periodEnd      DateTime?       @db.Date
+
+  @@index([siteId, createdAt])
+  @@index([entityId])
+  @@map("labour_entries")
+}
+
+// Closing an open period is a lifecycle event, not an amendment.
+model LabourPeriodClosure {
+  id             String   @id @default(uuid()) @db.Uuid
+  labourEntityId String   @unique @db.Uuid
+  closedOn       DateTime @db.Date
+  finalOutputQty Decimal  @db.Decimal(14, 3)
+  closedById     String   @db.Uuid
+  createdAt      DateTime @default(now())
+
+  @@map("labour_period_closures")
+}
+
+// Owner-set cost benchmarks; append-only history, effective by date.
+model BenchmarkRate {
+  id                   String   @id @default(uuid()) @db.Uuid
+  workTypeId           String   @db.Uuid
+  unit                 Unit
+  benchmarkCostPerUnit Decimal  @db.Decimal(12, 2)
+  effectiveFrom        DateTime @db.Date
+  setById              String   @db.Uuid
+  createdAt            DateTime @default(now())
+
+  @@index([workTypeId, effectiveFrom])
+  @@map("benchmark_rates")
+}
+
+// ---------- Audit & notifications ----------
+
+model AuditFlag {
+  id           String       @id @default(uuid()) @db.Uuid
+  siteId       String       @db.Uuid
+  rule         AuditRule
+  severity     FlagSeverity
+  subjectType  String
+  subjectId    String
+  details      Json
+  status       FlagStatus   @default(open)
+  reviewedById String?      @db.Uuid
+  reviewNote   String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @default(now()) @updatedAt
+
+  @@unique([rule, subjectType, subjectId])
+  @@index([siteId, status, severity])
+  @@map("audit_flags")
+}
+
+model Notification {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  flagId    String?   @db.Uuid
+  title     String
+  body      String
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
+}
+
+// ---------- Versioning infrastructure ----------
+
+// Every amendment (and every owner edit) lands here — the owner's review feed.
+model EditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  entityType  RecordType
+  entityId    String   @db.Uuid
+  fromVersion Int
+  toVersion   Int
+  actorId     String   @db.Uuid
+  actorRole   String
+  reason      String
+  diff        Json
+  createdAt   DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("edit_log")
+}
+
+// Owner-configurable whitelist: who may amend which record type, and when.
+model AmendmentPolicy {
+  id            String          @id @default(uuid()) @db.Uuid
+  recordType    RecordType      @unique
+  allowedWindow AmendmentWindow
+  allowedActor  AmendmentActor  @default(author)
+  enabled       Boolean         @default(true)
+  updatedById   String?         @db.Uuid
+  updatedAt     DateTime        @default(now()) @updatedAt
+
+  @@map("amendment_policies")
+}
+
+// A site's business day is closed automatically at 23:59 IST (or manually by
+// the owner); it gates the until_day_close amendment window.
+model DayClose {
+  id           String    @id @default(uuid()) @db.Uuid
+  siteId       String    @db.Uuid
+  businessDate DateTime  @db.Date
+  closedAt     DateTime  @default(now())
+  closedById   String?   @db.Uuid
+
+  @@unique([siteId, businessDate])
+  @@map("day_closes")
+}

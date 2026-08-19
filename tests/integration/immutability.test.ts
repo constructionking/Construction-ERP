@@ -265,7 +265,7 @@ describe("amendment engine", () => {
     expect(log).not.toBeNull();
   });
 
-  it("requisitions: amendable until an approver acts, frozen after", async () => {
+  it("requisitions: amendable until decided; a query re-opens for resubmission", async () => {
     const req = await testDb.requisition.create({
       data: {
         siteId,
@@ -293,17 +293,31 @@ describe("amendment engine", () => {
     });
     expect(ok.version).toBe(2);
 
+    // A query explicitly invites a corrected resubmission.
     await testDb.approvalAction.create({
       data: { requisitionEntityId: req.entityId, action: "queried", actorId: ownerId, reason: "why?" },
     });
+    const resubmitted = await amendRecord({
+      recordType: "requisition",
+      entityId: req.entityId,
+      ctx: engineerCtx(),
+      actorRoleLabel: "engineer",
+      reason: "answering the query with revised justification",
+      data: {},
+    });
+    expect(resubmitted.version).toBe(3);
 
+    // Any decision other than a query freezes the request.
+    await testDb.approvalAction.create({
+      data: { requisitionEntityId: req.entityId, action: "approved", actorId: ownerId },
+    });
     await expect(
       amendRecord({
         recordType: "requisition",
         entityId: req.entityId,
         ctx: engineerCtx(),
         actorRoleLabel: "engineer",
-        reason: "trying to change after query",
+        reason: "trying to change after approval",
         data: {},
       })
     ).rejects.toThrow(/approver has already acted/);

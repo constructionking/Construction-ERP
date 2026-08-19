@@ -142,10 +142,14 @@ async function assertWindowOpen(
       return;
     }
     case "until_actioned": {
-      const action = await prisma.approvalAction.findFirst({
+      const latest = await prisma.approvalAction.findFirst({
         where: { requisitionEntityId: row.entityId },
+        orderBy: { createdAt: "desc" },
       });
-      if (action) {
+      // No action yet → freely editable. A query is an explicit request for
+      // changes, so the author may respond with a new version; any other
+      // decision freezes the request.
+      if (latest && latest.action !== "queried") {
         throw new ApiError(
           403,
           "Amendment window closed: an approver has already acted on this request"

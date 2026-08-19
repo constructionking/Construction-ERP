@@ -170,6 +170,7 @@ enum AuditRule {
   scan_variance
   receipt_requisition_mismatch
   ai_progress_discrepancy
+  quality_inadequate
 }
 
 enum FlagSeverity {

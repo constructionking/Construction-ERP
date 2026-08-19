@@ -93,6 +93,9 @@ export const POST = withApi(async (req: NextRequest) => {
     return created;
   });
 
+  const { enqueue } = await import("@/lib/queue");
+  await enqueue("mb-anomaly", { mbVersionRowId: book.id });
+
   return NextResponse.json(
     { book: { id: book.id, entityId: book.entityId, lineCount: parsed.lines.length } },
     { status: 201 }

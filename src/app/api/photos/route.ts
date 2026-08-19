@@ -68,6 +68,12 @@ export const POST = withApi(async (req: NextRequest) => {
     },
   });
 
+  // Progress photos linked to an activity get an async AI second opinion.
+  if (meta.kind === "progress" && meta.activityId) {
+    const { enqueue } = await import("@/lib/queue");
+    await enqueue("ai-photo-progress", { siteId: meta.siteId, activityId: meta.activityId });
+  }
+
   return NextResponse.json({ photo: { id: photo.id, storageKey: key } }, { status: 201 });
 });
 

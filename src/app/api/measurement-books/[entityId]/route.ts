@@ -105,5 +105,8 @@ export const PUT = withApi(async (req: NextRequest, params) => {
     })),
   });
 
+  const { enqueue } = await import("@/lib/queue");
+  await enqueue("mb-anomaly", { mbVersionRowId: result.id });
+
   return NextResponse.json({ ok: true, ...result, lineCount: parsed.lines.length });
 });

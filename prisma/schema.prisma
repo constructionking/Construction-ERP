@@ -429,6 +429,8 @@ model MeasurementBook {
   storageKey  String
   parseStatus ParseStatus @default(pending)
   rowErrors   Json?
+  // Advisory-only AI review of parsed lines (never blocks, never edits data)
+  aiRemarks   Json?
 
   lines MbLine[]
 

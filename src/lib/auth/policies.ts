@@ -36,6 +36,9 @@ export const policies = {
 
   // --- engineer site operations ---
   "site.view": { anyRole: true },
+  // Operational site data (progress, stock, photos, scans, labour, MB):
+  // engineers only — accounts personnel see nothing beyond fund requests.
+  "site.ops.view": { roles: ["engineer"], scope: "site" },
   "progress.create": { roles: ["engineer"], scope: "site" },
   "mb.upload": { roles: ["engineer"], scope: "site" },
   "photo.upload": { roles: ["engineer"], scope: "site" },

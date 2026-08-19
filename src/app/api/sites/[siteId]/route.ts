@@ -6,7 +6,7 @@ import { guard, ApiError } from "@/lib/auth/guard";
 
 export const GET = withApi(async (_req, params) => {
   const siteId = params.siteId;
-  await guard("site.view", { siteId });
+  await guard("site.ops.view", { siteId });
   const site = await prisma.site.findUnique({
     where: { id: siteId },
     include: { activities: { orderBy: { sequence: "asc" } } },

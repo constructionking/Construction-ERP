@@ -7,7 +7,7 @@ import { unitEnum } from "@/lib/versioning/schemas";
 
 export const GET = withApi(async (_req, params) => {
   const siteId = params.siteId;
-  await guard("site.view", { siteId });
+  await guard("site.ops.view", { siteId });
   const activities = await prisma.activity.findMany({
     where: { siteId },
     orderBy: { sequence: "asc" },

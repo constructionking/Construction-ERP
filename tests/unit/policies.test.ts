@@ -48,6 +48,7 @@ describe("RBAC policy matrix", () => {
       "labour.create",
       "labour.closePeriod",
       "site.view",
+      "site.ops.view",
       "record.amend",
     ];
     for (const action of engineerActions) {
@@ -104,6 +105,8 @@ describe("RBAC policy matrix", () => {
       "baseline.lock",
       "flags.review",
       "requisition.approve.material",
+      // Accounts must not see site operations data at all — fund requests only.
+      "site.ops.view",
     ];
     for (const action of forbidden) {
       expect(isAllowed(accountsA, action, SITE_A), action).toBe(false);

@@ -13,3 +13,8 @@ try {
 } catch {
   // .env optional if env vars are set externally
 }
+
+// Tests truncate tables between files — never point them at the dev/demo DB.
+if (process.env.TEST_DATABASE_URL) {
+  process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
+}

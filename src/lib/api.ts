@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { ApiError } from "@/lib/auth/guard";
 
-type Handler = (
-  req: NextRequest,
-  params: Record<string, string>
-) => Promise<NextResponse | Response>;
+// Params values are strings for normal segments, string[] for catch-alls.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type RouteParams = Record<string, any>;
+
+type Handler = (req: NextRequest, params: RouteParams) => Promise<NextResponse | Response>;
 
 /**
  * Route-handler wrapper: uniform error mapping + same-origin check on
@@ -14,7 +15,7 @@ type Handler = (
 export function withApi(handler: Handler) {
   return async (
     req: NextRequest,
-    context: { params: Promise<Record<string, string>> }
+    context: { params: Promise<RouteParams> }
   ): Promise<Response> => {
     try {
       if (req.method !== "GET" && req.method !== "HEAD") {

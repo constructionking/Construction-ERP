@@ -34,7 +34,7 @@ const listQuery = z.object({
 
 export const GET = withApi(async (req: NextRequest) => {
   const q = listQuery.parse(Object.fromEntries(new URL(req.url).searchParams));
-  await guard("site.view", { siteId: q.siteId });
+  await guard("site.ops.view", { siteId: q.siteId });
   const receipts = await prisma.materialReceipt.findMany({
     where: { siteId: q.siteId, materialId: q.materialId, isCurrent: true, status: "submitted" },
     orderBy: [{ receivedDate: "desc" }, { createdAt: "desc" }],

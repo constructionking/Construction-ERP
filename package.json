@@ -43,6 +43,7 @@
     "@types/pg": "^8.11.10",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "playwright-core": "^1.62.1",
     "prisma": "^6.5.0",
     "tailwindcss": "^4.0.0",
     "tsx": "^4.19.2",

@@ -108,7 +108,7 @@ const listQuery = z.object({
 
 export const GET = withApi(async (req: NextRequest) => {
   const q = listQuery.parse(Object.fromEntries(new URL(req.url).searchParams));
-  await guard("site.view", { siteId: q.siteId });
+  await guard("site.ops.view", { siteId: q.siteId });
   const books = await prisma.measurementBook.findMany({
     where: { siteId: q.siteId, isCurrent: true },
     orderBy: { mbDate: "desc" },

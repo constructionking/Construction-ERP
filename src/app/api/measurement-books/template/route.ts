@@ -9,7 +9,7 @@ import { buildMbTemplate } from "@/lib/mb-parser/template";
 // in the Instructions sheet.
 export const GET = withApi(async (req: NextRequest) => {
   const siteId = z.string().uuid().parse(new URL(req.url).searchParams.get("siteId"));
-  await guard("site.view", { siteId });
+  await guard("site.ops.view", { siteId });
 
   const site = await prisma.site.findUnique({
     where: { id: siteId },

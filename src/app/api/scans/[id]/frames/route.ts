@@ -9,7 +9,7 @@ const bodySchema = z.object({
   finalize: z.boolean().default(false),
 });
 
-export const MIN_FRAMES = 8;
+const MIN_FRAMES = 8;
 
 // Attach captured frames (already uploaded as photos, kind=scan_frame) and,
 // on finalize, queue the reconstruction job for the Python worker.

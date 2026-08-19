@@ -85,7 +85,7 @@ const listQuery = z.object({
 
 export const GET = withApi(async (req: NextRequest) => {
   const q = listQuery.parse(Object.fromEntries(new URL(req.url).searchParams));
-  await guard("site.view", { siteId: q.siteId });
+  await guard("site.ops.view", { siteId: q.siteId });
   const photos = await prisma.photo.findMany({
     where: { siteId: q.siteId, activityId: q.activityId, kind: q.kind },
     orderBy: { createdAt: "desc" },

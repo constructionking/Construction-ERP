@@ -41,7 +41,7 @@ const listQuery = z.object({
 export const GET = withApi(async (req: NextRequest) => {
   const url = new URL(req.url);
   const q = listQuery.parse(Object.fromEntries(url.searchParams));
-  await guard("site.view", { siteId: q.siteId });
+  await guard("site.ops.view", { siteId: q.siteId });
 
   const entries = await prisma.progressEntry.findMany({
     where: {

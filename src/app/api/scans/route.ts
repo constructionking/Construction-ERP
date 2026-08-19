@@ -105,7 +105,7 @@ const listQuery = z.object({ siteId: z.string().uuid() });
 
 export const GET = withApi(async (req: NextRequest) => {
   const q = listQuery.parse(Object.fromEntries(new URL(req.url).searchParams));
-  await guard("site.view", { siteId: q.siteId });
+  await guard("site.ops.view", { siteId: q.siteId });
   const scans = await prisma.stockpileScan.findMany({
     where: { siteId: q.siteId },
     orderBy: { createdAt: "desc" },

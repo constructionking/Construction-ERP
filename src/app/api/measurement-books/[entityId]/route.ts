@@ -16,7 +16,7 @@ export const GET = withApi(async (_req, params) => {
     include: { lines: { orderBy: { srNo: "asc" } } },
   });
   if (!book) throw new ApiError(404, "Measurement book not found");
-  await guard("site.view", { siteId: book.siteId });
+  await guard("site.ops.view", { siteId: book.siteId });
 
   const history = await prisma.editLog.findMany({
     where: { entityType: "measurement_book", entityId },

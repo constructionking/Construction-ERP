@@ -2,6 +2,9 @@ import { Prisma, type AuditRule, type FlagSeverity } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { evaluateConsumptionVariance } from "./rules/consumption-variance";
 import { evaluateReceiptVsRequisition } from "./rules/receipt-checks";
+import { evaluateLabourCost } from "./rules/labour-cost";
+import { labourCostPerUnit, inclusiveDays } from "@/lib/labour";
+import { businessDateIST, dateOnly } from "@/lib/versioning/day-close";
 
 // ---------------------------------------------------------------------------
 // Cross-cutting audit engine. Rules are pure functions in ./rules; this file
@@ -244,4 +247,96 @@ export async function runReceiptAudits(receiptId: string) {
       }
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Departmental labour cost vs owner benchmark
+// ---------------------------------------------------------------------------
+
+export async function runLabourAudit(labourEntityId: string) {
+  const entry = await prisma.labourEntry.findFirst({
+    where: { entityId: labourEntityId, isCurrent: true, status: "submitted" },
+  });
+  if (!entry) return null;
+
+  const closure = await prisma.labourPeriodClosure.findUnique({
+    where: { labourEntityId },
+  });
+
+  const outputQty =
+    closure !== null
+      ? Number(closure.finalOutputQty)
+      : entry.outputQty !== null
+        ? Number(entry.outputQty)
+        : null;
+  if (outputQty === null || outputQty <= 0) return null;
+
+  const workType = await prisma.workType.findUnique({ where: { id: entry.workTypeId } });
+
+  // Latest benchmark effective on the entry's reference date, matching unit.
+  const referenceDate = entry.entryDate ?? entry.periodStart ?? entry.createdAt;
+  const benchmark = await prisma.benchmarkRate.findFirst({
+    where: {
+      workTypeId: entry.workTypeId,
+      unit: entry.outputUnit ?? undefined,
+      effectiveFrom: { lte: referenceDate },
+    },
+    orderBy: { effectiveFrom: "desc" },
+  });
+  if (!benchmark) return null;
+
+  const endIso = closure
+    ? dateOnly(closure.closedOn)
+    : entry.periodEnd
+      ? dateOnly(entry.periodEnd)
+      : businessDateIST();
+  const periodDays =
+    entry.entryType === "period" && entry.periodStart
+      ? inclusiveDays(dateOnly(entry.periodStart), endIso)
+      : 1;
+
+  const costPerUnit = labourCostPerUnit({
+    entryType: entry.entryType,
+    rateBasis: entry.rateBasis,
+    workersCount: entry.workersCount,
+    rate: Number(entry.rate),
+    outputQty,
+    periodDays,
+  });
+  if (costPerUnit === null) return null;
+
+  const finding = evaluateLabourCost({
+    costPerUnit,
+    benchmarkCostPerUnit: Number(benchmark.benchmarkCostPerUnit),
+  });
+
+  if (!finding) {
+    await autoResolveFlag("labour_cost_over_benchmark", "labour_entry", labourEntityId);
+    return null;
+  }
+
+  await raiseFlag({
+    siteId: entry.siteId,
+    rule: "labour_cost_over_benchmark",
+    severity: finding.severity,
+    subjectType: "labour_entry",
+    subjectId: labourEntityId,
+    details: {
+      workTypeId: entry.workTypeId,
+      workTypeName: workType?.name,
+      entryType: entry.entryType,
+      source: entry.source,
+      contractorName: entry.contractorName,
+      costPerUnit: Number(finding.costPerUnit.toFixed(2)),
+      benchmarkCostPerUnit: Number(finding.benchmarkCostPerUnit.toFixed(2)),
+      overrunPct: Number(finding.overrunPct.toFixed(1)),
+      unit: entry.outputUnit,
+      outputQty,
+      periodDays,
+    },
+    title: `Labour cost ${finding.overrunPct.toFixed(0)}% over benchmark`,
+    body: `${workType?.name ?? "Work"}: ₹${finding.costPerUnit.toFixed(0)}/${entry.outputUnit ?? "unit"} vs benchmark ₹${finding.benchmarkCostPerUnit.toFixed(0)}`,
+  });
+
+  return finding;
 }

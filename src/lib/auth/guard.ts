@@ -2,16 +2,9 @@ import { cache } from "react";
 import { prisma } from "@/lib/db";
 import { getSessionUserId } from "./session";
 import { isAllowed, type AuthCtx, type PolicyAction } from "./policies";
+import { ApiError } from "@/lib/errors";
 
-export class ApiError extends Error {
-  constructor(
-    public status: number,
-    message: string,
-    public details?: unknown
-  ) {
-    super(message);
-  }
-}
+export { ApiError };
 
 // Per-request memoized context load (React `cache`), so multiple guards in one
 // request hit the database once — but every REQUEST re-reads roles from DB.

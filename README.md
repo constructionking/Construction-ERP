@@ -24,8 +24,17 @@ owner; a focused approvals queue for accounts.
   reported to owner; shape-template fallback; LiDAR-ready scan API.
 - **Requisitions** — material/fund requests routed to the right approver,
   append-only decision log, mandatory reasons on rejection. Fund requests
-  run a three-step chain: accounts approves → owner final approval →
-  accounts releases the money, with a push notification at every hand-off.
+  run a three-step chain: accounts approves as-is → owner final approval →
+  accounts releases. If accounts wants a different amount, the request goes
+  back to the engineer to revise and resubmit. The engineer is silent
+  through the hops and gets exactly one alert: funds released. Every release
+  lands in the owner's dated & timed release log.
+- **Security** — DB-backed login lockout with exponential backoff (per
+  account + per IP), timing-safe login, bcrypt-12 with a password policy,
+  session tokens with owner force-logout (tokenVersion), magic-byte
+  verification of every upload, nosniff/attachment file serving, strict
+  self-only CSP + full security-header set, JSON body caps, https-only push
+  endpoints, and a clean `pnpm audit`.
 - **Push notifications (PWA)** — device push for fund-request hand-offs,
   audit flags and a daily 6 pm reminder to engineers who haven't entered
   consumption. Enable per device via the 🔔 button; set VAPID keys in .env.

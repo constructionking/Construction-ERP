@@ -16,18 +16,34 @@ export const GET = withApi(async () => {
 });
 
 const subscribeSchema = z.object({
-  endpoint: z.string().url().max(1000),
+  endpoint: z
+    .string()
+    .url()
+    .max(1000)
+    .refine((u) => u.startsWith("https://"), "Push endpoints must be https"),
   keys: z.object({
     p256dh: z.string().min(1).max(300),
     auth: z.string().min(1).max(200),
   }),
 });
 
+const MAX_SUBSCRIPTIONS_PER_USER = 10;
+
 // POST: register (or re-register) this device's push subscription.
 export const POST = withApi(async (req: NextRequest) => {
   const ctx = await requireCtx();
   const body = subscribeSchema.parse(await req.json());
   const userAgent = req.headers.get("user-agent")?.slice(0, 200) ?? null;
+
+  const count = await prisma.pushSubscription.count({ where: { userId: ctx.userId } });
+  if (count >= MAX_SUBSCRIPTIONS_PER_USER) {
+    // Drop the oldest instead of refusing — people replace phones.
+    const oldest = await prisma.pushSubscription.findFirst({
+      where: { userId: ctx.userId },
+      orderBy: { createdAt: "asc" },
+    });
+    if (oldest) await prisma.pushSubscription.delete({ where: { id: oldest.id } });
+  }
 
   await prisma.pushSubscription.upsert({
     where: { endpoint: body.endpoint },

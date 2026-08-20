@@ -38,12 +38,22 @@ const actionSchema = z
         path: ["reason"],
       });
     }
-    if (v.action === "partially_approved" && v.approvedAmount === undefined) {
-      ctx.addIssue({
-        code: "custom",
-        message: "approvedAmount is required for partial approval",
-        path: ["approvedAmount"],
-      });
+    if (v.action === "partially_approved") {
+      if (v.approvedAmount === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message: "The proposed amount is required when requesting a change",
+          path: ["approvedAmount"],
+        });
+      }
+      // The engineer must know WHY the amount is being changed to revise it.
+      if (!v.reason?.trim()) {
+        ctx.addIssue({
+          code: "custom",
+          message: "A note is mandatory when proposing a changed amount",
+          path: ["reason"],
+        });
+      }
     }
   });
 
@@ -99,8 +109,11 @@ export const POST = withApi(async (req: NextRequest, params) => {
 
   if (body.action === "partially_approved" && requisition.kind === "fund") {
     const total = Number(requisition.amountTotal ?? 0);
-    if (body.approvedAmount! >= total) {
-      throw new ApiError(400, "Partial approval must be less than the requested amount");
+    if (body.approvedAmount === total) {
+      throw new ApiError(
+        400,
+        "The proposed amount equals the request — approve it as-is instead"
+      );
     }
   }
 
@@ -122,33 +135,33 @@ export const POST = withApi(async (req: NextRequest, params) => {
   );
   const raiser = [requisition.createdById];
 
+  // The engineer stays quiet through the approval hops: they hear ONLY when
+  // something needs their action (change requested / query / rejection) or
+  // when the money is finally released.
   if (requisition.kind === "fund") {
     switch (body.action) {
       case "approved":
-      case "partially_approved":
-        // → to the OWNER for final approval
+        // → to the OWNER for final approval. Engineer: silence.
         await notifyUsers(await ownerUserIds(), {
           title: `Fund request awaiting your final approval · ${siteCode}`,
-          body: `Accounts ${body.action === "partially_approved" ? `partially approved ${amount}` : `approved ${amount}`} — your approval releases it`,
+          body: `Accounts approved ${amount} — your approval clears it for release`,
           url: `/dashboard/${requisition.siteId}/approvals`,
         });
+        break;
+      case "partially_approved":
+        // Change requested: back to the ENGINEER with the proposed amount.
         await notifyUsers(raiser, {
-          title: `Fund request cleared by accounts (${amount})`,
-          body: "Sent to the owner for final approval.",
+          title: `Accounts proposes ${amount} instead · ${siteCode}`,
+          body: `${body.reason?.trim()} — revise the request and resubmit.`,
           url: `/site/${requisition.siteId}/requisitions`,
         });
         break;
       case "owner_approved":
-        // → back to ACCOUNTS to actually release the money
+        // → back to ACCOUNTS to actually release. Engineer: silence.
         await notifyUsers(await siteRoleUserIds(requisition.siteId, "accounts"), {
           title: `Owner approved — release funds · ${siteCode}`,
           body: `${amount} is cleared for release. Open the queue to release it.`,
           url: "/approvals",
-        });
-        await notifyUsers(raiser, {
-          title: `Owner approved your fund request (${amount})`,
-          body: "Accounts will release the funds shortly.",
-          url: `/site/${requisition.siteId}/requisitions`,
         });
         break;
       case "owner_rejected":
@@ -162,13 +175,15 @@ export const POST = withApi(async (req: NextRequest, params) => {
         );
         break;
       case "released":
+        // The single "it's done" alert the engineer receives.
         await notifyUsers(raiser, {
-          title: `Funds released (${amount}) · ${siteCode}`,
-          body: "Accounts has released the approved amount.",
+          title: `✅ Funds released (${amount}) · ${siteCode}`,
+          body: "Approved through accounts and the owner — the amount has been released.",
           url: `/site/${requisition.siteId}/requisitions`,
         });
         break;
       default:
+        // rejected / queried / queued → the engineer needs to act or know.
         await notifyUsers(raiser, {
           title: `Your fund request was ${body.action.replace(/_/g, " ")}`,
           body: body.reason?.trim() || "Open the Requests tab for details.",

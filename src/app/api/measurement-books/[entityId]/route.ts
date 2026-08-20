@@ -45,6 +45,10 @@ export const PUT = withApi(async (req: NextRequest, params) => {
     include: { activities: { select: { code: true, unit: true } } },
   });
   const buffer = Buffer.from(await file.arrayBuffer());
+  const { isXlsxBytes } = await import("@/lib/uploads");
+  if (!isXlsxBytes(buffer)) {
+    throw new ApiError(400, "File content is not a valid .xlsx workbook");
+  }
   const parsed = await parseMeasurementBook(buffer, {
     code: site!.code,
     activities: site!.activities,

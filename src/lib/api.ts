@@ -24,6 +24,12 @@ export function withApi(handler: Handler) {
         if (origin && host && new URL(origin).host !== host) {
           return NextResponse.json({ error: "Cross-origin request rejected" }, { status: 403 });
         }
+        // JSON payload cap (multipart uploads have their own per-route caps).
+        const contentType = req.headers.get("content-type") ?? "";
+        const contentLength = Number(req.headers.get("content-length") ?? 0);
+        if (contentType.includes("application/json") && contentLength > 1_000_000) {
+          return NextResponse.json({ error: "Request body too large" }, { status: 413 });
+        }
       }
       const params = await context.params;
       return await handler(req, params ?? {});

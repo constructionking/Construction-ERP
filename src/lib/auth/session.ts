@@ -7,26 +7,40 @@ const SESSION_DAYS = 7;
 
 const secret = new TextEncoder().encode(env.AUTH_SECRET);
 
-// The token carries ONLY the user id. Roles and owner status are re-read from
-// the database on every guarded request, so revoking access is instant.
-export async function createSessionToken(userId: string): Promise<string> {
-  return new SignJWT({ sub: userId })
+// The token carries the user id + the user's tokenVersion. Roles and owner
+// status are re-read from the database on every guarded request, and a
+// tokenVersion mismatch (password change / owner-forced logout) invalidates
+// every outstanding token for that user instantly.
+export interface SessionClaims {
+  userId: string;
+  tokenVersion: number;
+}
+
+export async function createSessionToken(
+  userId: string,
+  tokenVersion: number
+): Promise<string> {
+  return new SignJWT({ sub: userId, tv: tokenVersion })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(`${SESSION_DAYS}d`)
     .sign(secret);
 }
 
-export async function verifySessionToken(token: string): Promise<string | null> {
+export async function verifySessionToken(token: string): Promise<SessionClaims | null> {
   try {
     const { payload } = await jwtVerify(token, secret, { algorithms: ["HS256"] });
-    return typeof payload.sub === "string" ? payload.sub : null;
+    if (typeof payload.sub !== "string") return null;
+    return {
+      userId: payload.sub,
+      tokenVersion: typeof payload.tv === "number" ? payload.tv : 0,
+    };
   } catch {
     return null;
   }
 }
 
-export async function getSessionUserId(): Promise<string | null> {
+export async function getSessionClaims(): Promise<SessionClaims | null> {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
   if (!token) return null;

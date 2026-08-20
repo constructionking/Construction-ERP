@@ -1,9 +1,22 @@
 import { prisma } from "@/lib/db";
 import { requireSiteRolePage } from "@/lib/auth/page-guard";
 import { listRequisitionsWithState } from "@/lib/requisitions";
+import { releaseLog } from "@/lib/reports/releases";
 import { Badge, Card, CardContent, CardHeader, CardTitle, EmptyState } from "@/components/ui";
-import { formatINR } from "@/lib/format/inr";
+import { formatINR, formatINRCompact } from "@/lib/format/inr";
 import { OwnerRequisitionCard } from "./owner-requisition-card";
+
+function stamp(d: Date | null): string {
+  if (!d) return "—";
+  return d.toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Asia/Kolkata",
+  });
+}
 
 export default async function OwnerApprovalsPage({
   params,
@@ -13,10 +26,11 @@ export default async function OwnerApprovalsPage({
   const { siteId } = await params;
   await requireSiteRolePage(siteId, []);
 
-  const [items, materials, users] = await Promise.all([
+  const [items, materials, users, releases] = await Promise.all([
     listRequisitionsWithState({ siteIds: [siteId] }),
     prisma.material.findMany(),
     prisma.user.findMany({ select: { id: true, name: true } }),
+    releaseLog(siteId),
   ]);
   const materialById = new Map(materials.map((m) => [m.id, m.name]));
   const userById = new Map(users.map((u) => [u.id, u.name]));
@@ -48,37 +62,27 @@ export default async function OwnerApprovalsPage({
               Accounts has verified these. Your approval sends them back to accounts for the
               actual release of funds.
             </p>
-            {fundAwaitingOwner.map(({ requisition, actions, state }) => {
-              const accountsCall = actions[actions.length - 1];
-              const approvedAmount =
-                accountsCall?.approvedAmount !== null && accountsCall
-                  ? Number(accountsCall.approvedAmount)
-                  : Number(requisition.amountTotal ?? 0);
-              return (
-                <OwnerRequisitionCard
-                  key={requisition.entityId}
-                  mode="fundFinal"
-                  entityId={requisition.entityId}
-                  state={state}
-                  raisedBy={userById.get(requisition.createdById) ?? "Engineer"}
-                  createdAt={requisition.createdAt.toISOString()}
-                  justification={requisition.justification}
-                  lines={[
-                    ...(requisition.lines as { head: string; amount: number }[]).map((line) => ({
-                      label: line.head,
-                      value: formatINR(line.amount),
-                    })),
-                    {
-                      label:
-                        accountsCall?.action === "partially_approved"
-                          ? "Accounts cleared (partial)"
-                          : "Accounts cleared",
-                      value: formatINR(approvedAmount),
-                    },
-                  ]}
-                />
-              );
-            })}
+            {fundAwaitingOwner.map(({ requisition, state }) => (
+              <OwnerRequisitionCard
+                key={requisition.entityId}
+                mode="fundFinal"
+                entityId={requisition.entityId}
+                state={state}
+                raisedBy={userById.get(requisition.createdById) ?? "Engineer"}
+                createdAt={requisition.createdAt.toISOString()}
+                justification={requisition.justification}
+                lines={[
+                  ...(requisition.lines as { head: string; amount: number }[]).map((line) => ({
+                    label: line.head,
+                    value: formatINR(line.amount),
+                  })),
+                  {
+                    label: "Accounts cleared",
+                    value: formatINR(Number(requisition.amountTotal ?? 0)),
+                  },
+                ]}
+              />
+            ))}
           </CardContent>
         </Card>
       ) : null}
@@ -154,6 +158,53 @@ export default async function OwnerApprovalsPage({
                       ? "release pending"
                       : state.replace(/_/g, " ")}
                   </Badge>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle>💸 Funds release log — every rupee released, dated & timed</CardTitle>
+            {releases.rows.length > 0 ? (
+              <Badge tone="blue">total {formatINRCompact(releases.totalReleased)}</Badge>
+            ) : null}
+          </div>
+        </CardHeader>
+        <CardContent>
+          {releases.rows.length === 0 ? (
+            <EmptyState
+              title="No releases yet"
+              hint="Every release lands here permanently: when, how much, for what, and who signed off"
+            />
+          ) : (
+            <div className="space-y-2">
+              {releases.rows.map((row) => (
+                <div
+                  key={`${row.requisitionEntityId}-${row.releasedAt.getTime()}`}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2.5"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-slate-900">
+                        {formatINR(row.amount)}
+                        <span className="ml-2 font-normal text-slate-500">
+                          released {stamp(row.releasedAt)} by {row.releasedBy}
+                        </span>
+                      </p>
+                      <p className="mt-0.5 text-xs text-slate-600">{row.heads.join(" · ")}</p>
+                      <p className="mt-0.5 text-xs text-slate-400">
+                        {row.justification} — raised by {row.raisedBy}
+                      </p>
+                      <p className="mt-1 text-[11px] text-slate-400">
+                        accounts ✓ {row.accountsApprovedBy} {stamp(row.accountsApprovedAt)} · owner
+                        ✓ {row.ownerApprovedBy} {stamp(row.ownerApprovedAt)}
+                      </p>
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>

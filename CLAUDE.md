@@ -75,14 +75,39 @@ Tests: `pnpm test:unit` (no DB), `pnpm test:integration` (needs DB).
   `prisma.notification.createMany` directly.
 - Fund requisitions follow a three-step chain, derived from the append-only
   `approval_actions` log in `src/lib/requisitions.ts` (`deriveState`):
-  engineer raises (push → accounts) → accounts approves (push → owner,
+  engineer raises (push → accounts) → accounts approves AS-IS (push → owner,
   state `awaiting_owner`) → owner `owner_approved` (push → accounts,
-  `awaiting_release`) → accounts `released` (terminal, push → engineer).
-  Transition legality lives in `ACCOUNTS_FUND_ACTIONS` / `OWNER_FUND_ACTIONS`
-  and is enforced in the actions route. Material requests stay single-step
-  (owner decides).
+  `awaiting_release`) → accounts `released` (terminal — the ONLY alert the
+  engineer receives in the whole chain). If accounts wants a different
+  amount, `partially_approved` = "change requested": the request goes BACK
+  to the engineer (state `changes_requested`, push → engineer) to revise and
+  resubmit; it never moves forward at a changed amount. The engineer stays
+  silent through all approval hops. Transition legality lives in
+  `ACCOUNTS_FUND_ACTIONS` / `OWNER_FUND_ACTIONS` and is enforced in the
+  actions route. Material requests stay single-step (owner decides).
+- Every release lands in the owner's dated/timed release log
+  (`src/lib/reports/releases.ts`, rendered on the site Approvals tab) —
+  derived from the immutable action chain, never stored mutable.
 - Daily 6 pm IST reminder (`src/worker/reminder-jobs.ts`) nudges engineers
   who haven't recorded consumption for the day.
+
+## Security invariants
+
+- Login goes through the durable lockout in `src/lib/auth/lockout.ts`
+  (DB-backed `login_attempts`; per-account exponential backoff + per-IP
+  brake) with a timing-equalizing dummy bcrypt compare. Never add an
+  auth path that skips it.
+- Session JWTs carry `tokenVersion`; `loadCtx()` rejects stale versions.
+  Password change and the owner's revoke-sessions endpoint bump it.
+- Uploads are verified by MAGIC BYTES (`src/lib/uploads.ts`), never by the
+  client-declared MIME type; files are served with nosniff +
+  Content-Disposition and a content-type whitelist.
+- Passwords must pass `src/lib/auth/password.ts` (min 10, common-list
+  reject, bcrypt cost 12).
+- Security headers/CSP live in `next.config.ts` — keep CSP self-only; no
+  third-party script origins.
+- `pnpm audit --prod` must stay clean (pnpm.overrides pin patched
+  transitive deps).
 
 ## Conventions
 

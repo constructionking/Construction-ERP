@@ -22,9 +22,21 @@ describe("fund request lifecycle (engineer → accounts → owner → release)",
     expect(deriveState("fund", current, [])).toBe("pending");
   });
 
-  it("accounts approval hands it to the OWNER, not straight to money", () => {
+  it("accounts as-is approval hands it to the OWNER, not straight to money", () => {
     expect(deriveState("fund", current, actions("approved"))).toBe("awaiting_owner");
-    expect(deriveState("fund", current, actions("partially_approved"))).toBe("awaiting_owner");
+  });
+
+  it("a proposed amount change goes BACK to the engineer, never forward", () => {
+    expect(deriveState("fund", current, actions("partially_approved"))).toBe(
+      "changes_requested"
+    );
+    // engineer revises → new version after the action → back in accounts queue
+    const revised = { createdAt: new Date(T0.getTime() + 10 * 60_000) };
+    expect(deriveState("fund", revised, actions("partially_approved"))).toBe("resubmitted");
+    // full happy path after revision
+    expect(
+      deriveState("fund", current, actions("partially_approved", "approved", "owner_approved", "released"))
+    ).toBe("released");
   });
 
   it("owner approval hands it back to ACCOUNTS for the actual release", () => {
@@ -61,6 +73,11 @@ describe("fund request lifecycle (engineer → accounts → owner → release)",
   it("accounts may not double-approve once it is with the owner or released", () => {
     expect(ACCOUNTS_FUND_ACTIONS["awaiting_owner"]).toEqual([]);
     expect(ACCOUNTS_FUND_ACTIONS["released"]).toEqual([]);
+  });
+
+  it("while a change is requested, only the engineer can move it (accounts may at most close it)", () => {
+    expect(ACCOUNTS_FUND_ACTIONS["changes_requested"]).toEqual(["rejected"]);
+    expect(OWNER_FUND_ACTIONS["changes_requested"]).toEqual([]);
   });
 
   it("the owner acts only while the request is awaiting them", () => {

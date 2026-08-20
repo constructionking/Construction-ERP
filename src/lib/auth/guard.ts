@@ -1,6 +1,6 @@
 import { cache } from "react";
 import { prisma } from "@/lib/db";
-import { getSessionUserId } from "./session";
+import { getSessionClaims } from "./session";
 import { isAllowed, type AuthCtx, type PolicyAction } from "./policies";
 import { ApiError } from "@/lib/errors";
 
@@ -9,13 +9,15 @@ export { ApiError };
 // Per-request memoized context load (React `cache`), so multiple guards in one
 // request hit the database once — but every REQUEST re-reads roles from DB.
 export const loadCtx = cache(async (): Promise<AuthCtx | null> => {
-  const userId = await getSessionUserId();
-  if (!userId) return null;
+  const claims = await getSessionClaims();
+  if (!claims) return null;
   const user = await prisma.user.findUnique({
-    where: { id: userId },
+    where: { id: claims.userId },
     include: { siteRoles: true },
   });
   if (!user || !user.isActive) return null;
+  // Stale token (password changed / sessions revoked by the owner) → signed out.
+  if (user.tokenVersion !== claims.tokenVersion) return null;
   return {
     userId: user.id,
     name: user.name,

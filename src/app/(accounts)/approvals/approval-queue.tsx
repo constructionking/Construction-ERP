@@ -43,6 +43,7 @@ const STATE_TONES: Record<string, "neutral" | "green" | "amber" | "red" | "blue"
   awaiting_release: "green",
   owner_rejected: "red",
   released: "green",
+  changes_requested: "amber",
   rejected: "red",
   queried: "amber",
   queued: "neutral",
@@ -52,6 +53,7 @@ const STATE_LABELS: Record<string, string> = {
   awaiting_owner: "with owner",
   awaiting_release: "ready to release",
   owner_rejected: "owner rejected",
+  changes_requested: "sent back for changes",
 };
 
 export function ApprovalQueue({ items }: { items: QueueItem[] }) {
@@ -194,7 +196,7 @@ function QueueCard({
                   Approve → owner
                 </Button>
                 <Button variant="secondary" disabled={busy} onClick={() => setMode("partial")}>
-                  Partial
+                  Request change (₹)
                 </Button>
                 <Button variant="secondary" disabled={busy} onClick={() => setMode("query")}>
                   Query
@@ -210,7 +212,7 @@ function QueueCard({
               <div className="space-y-2 rounded-lg border border-slate-200 p-3">
                 {mode === "partial" ? (
                   <div>
-                    <Label>Approved amount (₹)</Label>
+                    <Label>Proposed amount (₹) — sent back to the engineer to revise</Label>
                     <Input
                       type="number"
                       inputMode="decimal"
@@ -220,10 +222,11 @@ function QueueCard({
                     />
                   </div>
                 ) : null}
-                {mode === "reject" || mode === "query" ? (
+                {mode === "reject" || mode === "query" || mode === "partial" ? (
                   <div>
                     <Label>
-                      Reason <span className="text-red-600">*</span>
+                      {mode === "partial" ? "Why this amount" : "Reason"}{" "}
+                      <span className="text-red-600">*</span>
                     </Label>
                     <Textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} />
                   </div>
@@ -235,17 +238,17 @@ function QueueCard({
                   <Button
                     disabled={
                       busy ||
-                      (mode === "partial" && !amount) ||
+                      (mode === "partial" && (!amount || reason.trim().length === 0)) ||
                       ((mode === "reject" || mode === "query") && reason.trim().length === 0)
                     }
                     onClick={() =>
                       mode === "partial"
-                        ? act("partially_approved", { approvedAmount: Number(amount) })
+                        ? act("partially_approved", { approvedAmount: Number(amount), reason })
                         : act(mode === "reject" ? "rejected" : "queried", { reason })
                     }
                     className={cn("flex-1")}
                   >
-                    Confirm {mode}
+                    {mode === "partial" ? "Send back with proposal" : `Confirm ${mode}`}
                   </Button>
                 </div>
               </div>

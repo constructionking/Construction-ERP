@@ -50,6 +50,7 @@ const STATE_TONES: Record<string, "neutral" | "green" | "amber" | "red" | "blue"
   awaiting_release: "amber",
   released: "green",
   owner_rejected: "red",
+  changes_requested: "amber",
   rejected: "red",
   queried: "amber",
   queued: "neutral",
@@ -60,6 +61,7 @@ const STATE_LABELS: Record<string, string> = {
   awaiting_release: "release pending",
   owner_rejected: "owner rejected",
   released: "funds released",
+  changes_requested: "change requested",
 };
 
 export function RequisitionsScreen({
@@ -146,10 +148,14 @@ export function RequisitionsScreen({
                   Approver: {item.latestReason}
                 </p>
               ) : null}
-              {item.editable || item.state === "queried" ? (
+              {item.editable || item.state === "queried" || item.state === "changes_requested" ? (
                 <div className="mt-3">
                   <Button variant="secondary" onClick={() => setEditing(item)}>
-                    {item.editable ? "Edit (before pickup)" : "Answer query & resubmit"}
+                    {item.editable
+                      ? "Edit (before pickup)"
+                      : item.state === "changes_requested"
+                        ? "Revise & resubmit"
+                        : "Answer query & resubmit"}
                   </Button>
                 </div>
               ) : null}

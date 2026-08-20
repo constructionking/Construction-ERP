@@ -8,10 +8,14 @@ import type { ApprovalAction, Requisition, RequisitionKind } from "@prisma/clien
 // approved/rejected.
 //
 // FUND requests — the three-step money chain:
-//   engineer raises → ACCOUNTS approves/partial (recommendation)
+//   engineer raises → ACCOUNTS approves AS-IS
 //     → awaiting_owner  (owner gets a push; final approval on the dashboard)
 //   → OWNER owner_approved → awaiting_release (accounts gets a push)
-//   → ACCOUNTS released   (money actually goes out — terminal)
+//   → ACCOUNTS released   (money actually goes out — terminal;
+//                          the ONE alert the engineer receives)
+// If accounts wants a different amount they do NOT forward it: a
+// partially_approved action means "change requested" — the request goes BACK
+// to the engineer (with the proposed amount + reason) to revise and resubmit.
 // Reject at either level is terminal; a query hands it back to the engineer.
 // ---------------------------------------------------------------------------
 
@@ -22,7 +26,8 @@ export type RequisitionState =
   | "queued"
   | "rejected"
   | "approved" // terminal for material
-  | "partially_approved"
+  | "partially_approved" // material only (fund maps to changes_requested)
+  | "changes_requested"
   | "awaiting_owner"
   | "awaiting_release"
   | "owner_rejected"
@@ -46,8 +51,10 @@ export function deriveState(
 
   switch (latest.action) {
     case "approved":
-    case "partially_approved":
       return "awaiting_owner";
+    case "partially_approved":
+      // Accounts proposed a different amount → back with the engineer.
+      return "changes_requested";
     case "owner_approved":
       return "awaiting_release";
     case "owner_rejected":
@@ -65,6 +72,7 @@ export const ACCOUNTS_FUND_ACTIONS: Record<RequisitionState, string[]> = {
   resubmitted: ["approved", "partially_approved", "rejected", "queried", "queued"],
   queued: ["approved", "partially_approved", "rejected", "queried"],
   queried: ["rejected"], // waiting on the engineer; accounts may still close it
+  changes_requested: ["rejected"], // back with the engineer to revise
   awaiting_owner: [], // it is with the owner now
   awaiting_release: ["released"],
   approved: [],
@@ -81,6 +89,7 @@ export const OWNER_FUND_ACTIONS: Record<RequisitionState, string[]> = {
   resubmitted: [],
   queued: [],
   queried: [],
+  changes_requested: [],
   awaiting_release: [],
   approved: [],
   partially_approved: [],

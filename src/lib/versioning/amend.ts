@@ -146,10 +146,10 @@ async function assertWindowOpen(
         where: { requisitionEntityId: row.entityId },
         orderBy: { createdAt: "desc" },
       });
-      // No action yet → freely editable. A query is an explicit request for
-      // changes, so the author may respond with a new version; any other
-      // decision freezes the request.
-      if (latest && latest.action !== "queried") {
+      // No action yet → freely editable. A query or a proposed amount change
+      // (partially_approved) is an explicit request for changes, so the author
+      // may respond with a new version; any other decision freezes the request.
+      if (latest && latest.action !== "queried" && latest.action !== "partially_approved") {
         throw new ApiError(
           403,
           "Amendment window closed: an approver has already acted on this request"

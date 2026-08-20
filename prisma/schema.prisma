@@ -200,11 +200,27 @@ model User {
   passwordHash String
   isOwner      Boolean  @default(false)
   isActive     Boolean  @default(true)
+  // Bumping this invalidates every outstanding session token for the user
+  // (password change, owner-forced logout). Checked on every request.
+  tokenVersion Int      @default(1)
   createdAt    DateTime @default(now())
 
   siteRoles SiteRole[]
 
   @@map("users")
+}
+
+// Durable brute-force ledger: survives restarts, works across instances.
+model LoginAttempt {
+  id         String   @id @default(uuid()) @db.Uuid
+  identifier String   // lowercased email/phone that was attempted
+  ip         String
+  success    Boolean
+  createdAt  DateTime @default(now())
+
+  @@index([identifier, createdAt])
+  @@index([ip, createdAt])
+  @@map("login_attempts")
 }
 
 model SiteRole {

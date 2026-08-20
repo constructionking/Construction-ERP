@@ -18,6 +18,10 @@ async function loadAndParse(siteId: string, file: File) {
   if (!site) throw new ApiError(404, "Site not found");
 
   const buffer = Buffer.from(await file.arrayBuffer());
+  const { isXlsxBytes } = await import("@/lib/uploads");
+  if (!isXlsxBytes(buffer)) {
+    throw new ApiError(400, "File content is not a valid .xlsx workbook");
+  }
   const parsed = await parseMeasurementBook(buffer, {
     code: site.code,
     activities: site.activities,

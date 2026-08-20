@@ -4,53 +4,49 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { withApi } from "@/lib/api";
 import { createSessionToken, sessionCookieOptions, SESSION_COOKIE } from "@/lib/auth/session";
+import { checkLockout, recordAttempt } from "@/lib/auth/lockout";
 
 const loginSchema = z.object({
-  identifier: z.string().min(1), // email or phone
-  password: z.string().min(1),
+  identifier: z.string().min(1).max(200), // email or phone
+  password: z.string().min(1).max(200),
 });
 
-// Simple in-memory limiter: 10 attempts / 15 min per identifier+IP.
-const attempts = new Map<string, { count: number; resetAt: number }>();
-const LIMIT = 10;
-const WINDOW_MS = 15 * 60 * 1000;
-
-function rateLimited(key: string): boolean {
-  const now = Date.now();
-  const entry = attempts.get(key);
-  if (!entry || entry.resetAt < now) {
-    attempts.set(key, { count: 1, resetAt: now + WINDOW_MS });
-    return false;
-  }
-  entry.count += 1;
-  return entry.count > LIMIT;
-}
+// Hashing a dummy password on every miss keeps response timing identical for
+// unknown-user vs wrong-password — no account enumeration via timing.
+const DUMMY_HASH = bcrypt.hashSync("timing-equalizer-dummy-password", 12);
 
 export const POST = withApi(async (req: NextRequest) => {
   const { identifier, password } = loginSchema.parse(await req.json());
+  const normalized = identifier.toLowerCase().trim();
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "local";
-  if (rateLimited(`${identifier.toLowerCase()}:${ip}`)) {
+
+  // Durable, DB-backed brute-force brake (per account + per IP).
+  const lock = await checkLockout(normalized, ip);
+  if (lock.locked) {
     return NextResponse.json(
-      { error: "Too many attempts. Try again in a few minutes." },
-      { status: 429 }
+      { error: "Too many failed attempts. Try again later." },
+      { status: 429, headers: { "Retry-After": String(lock.retryAfterSeconds) } }
     );
   }
 
   const user = await prisma.user.findFirst({
     where: {
-      OR: [{ email: identifier.toLowerCase() }, { phone: identifier }],
+      OR: [{ email: normalized }, { phone: identifier.trim() }],
       isActive: true,
     },
     include: { siteRoles: true },
   });
 
-  // Constant-shape response for wrong user vs wrong password.
-  const ok = user && (await bcrypt.compare(password, user.passwordHash));
-  if (!ok) {
+  const ok = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH);
+
+  await recordAttempt(normalized, ip, Boolean(user && ok));
+
+  if (!user || !ok) {
+    // Generic message either way — no signal about which part was wrong.
     return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
   }
 
-  const token = await createSessionToken(user.id);
+  const token = await createSessionToken(user.id, user.tokenVersion);
 
   // Landing page by role priority: owner → dashboard, engineer → site page,
   // accounts → approvals queue.

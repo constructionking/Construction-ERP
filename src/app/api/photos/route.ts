@@ -27,6 +27,14 @@ export const POST = withApi(async (req: NextRequest) => {
     throw new ApiError(400, `Unsupported image type: ${file.type || "unknown"}`);
   }
 
+  // Verify the BYTES are a real image — the declared MIME type is untrusted.
+  const bytes = Buffer.from(await file.arrayBuffer());
+  const { verifiedImageType } = await import("@/lib/uploads");
+  const realType = verifiedImageType(bytes);
+  if (!realType) {
+    throw new ApiError(400, "File content is not a valid image");
+  }
+
   const meta = metaSchema.parse({
     siteId: form.get("siteId"),
     activityId: form.get("activityId") ?? undefined,
@@ -46,12 +54,24 @@ export const POST = withApi(async (req: NextRequest) => {
     }
   }
 
+  // Storage-flooding brake: generous cap on uploads per user per day.
+  const uploadsToday = await prisma.photo.count({
+    where: {
+      uploadedById: ctx.userId,
+      createdAt: { gte: new Date(Date.now() - 24 * 3600 * 1000) },
+    },
+  });
+  if (uploadsToday >= 500) {
+    throw new ApiError(429, "Daily upload limit reached — contact the owner if genuine");
+  }
+
   const key = makeStorageKey({
     siteId: meta.siteId,
     kind: meta.kind,
     fileName: file.name || "photo.jpg",
   });
-  await getStorage().put(key, Buffer.from(await file.arrayBuffer()), file.type);
+  // Store under the VERIFIED content type, not the client-declared one.
+  await getStorage().put(key, bytes, realType);
 
   const photo = await prisma.photo.create({
     data: {

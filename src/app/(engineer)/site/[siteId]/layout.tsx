@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { requireSiteRolePage } from "@/lib/auth/page-guard";
 import { SignOutButton } from "@/components/SignOutButton";
+import { EnablePushButton } from "@/components/EnablePushButton";
 import { EngineerNav } from "./nav";
 
 export default async function EngineerLayout({
@@ -26,7 +27,10 @@ export default async function EngineerLayout({
               {site?.name ?? "Site"}
             </h1>
           </div>
-          <SignOutButton />
+          <div className="flex items-center gap-3">
+            <EnablePushButton />
+            <SignOutButton />
+          </div>
         </div>
       </header>
       <main className="flex-1 px-3 pb-24 pt-4">{children}</main>

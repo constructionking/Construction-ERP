@@ -11,6 +11,7 @@ export function OwnerRequisitionCard({
   createdAt,
   justification,
   lines,
+  mode = "material",
 }: {
   entityId: string;
   state: string;
@@ -18,9 +19,11 @@ export function OwnerRequisitionCard({
   createdAt: string;
   justification: string;
   lines: { label: string; value: string }[];
+  /** material: direct owner decision · fundFinal: final approval after accounts */
+  mode?: "material" | "fundFinal";
 }) {
   const router = useRouter();
-  const [mode, setMode] = useState<null | "reject" | "query">(null);
+  const [uiMode, setUiMode] = useState<null | "reject" | "query">(null);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,7 +42,7 @@ export function OwnerRequisitionCard({
         setError(data.error ?? "Action failed");
         return;
       }
-      setMode(null);
+      setUiMode(null);
       router.refresh();
     } finally {
       setBusy(false);
@@ -66,15 +69,21 @@ export function OwnerRequisitionCard({
         <Badge tone="blue">{state.replace("_", " ")}</Badge>
       </div>
       <div className="mt-3">
-        {mode === null ? (
+        {uiMode === null ? (
           <div className="flex gap-2">
-            <Button variant="success" disabled={busy} onClick={() => act("approved")}>
-              Approve
+            <Button
+              variant="success"
+              disabled={busy}
+              onClick={() => act(mode === "fundFinal" ? "owner_approved" : "approved")}
+            >
+              {mode === "fundFinal" ? "✓ Final approve — release to accounts" : "Approve"}
             </Button>
-            <Button variant="secondary" disabled={busy} onClick={() => setMode("query")}>
-              Query
-            </Button>
-            <Button variant="danger" disabled={busy} onClick={() => setMode("reject")}>
+            {mode === "material" ? (
+              <Button variant="secondary" disabled={busy} onClick={() => setUiMode("query")}>
+                Query
+              </Button>
+            ) : null}
+            <Button variant="danger" disabled={busy} onClick={() => setUiMode("reject")}>
               Reject
             </Button>
           </div>
@@ -82,19 +91,28 @@ export function OwnerRequisitionCard({
           <div className="space-y-2">
             <Textarea
               rows={2}
-              placeholder={`Reason for ${mode} (required)`}
+              placeholder={`Reason for ${uiMode} (required)`}
               value={reason}
               onChange={(e) => setReason(e.target.value)}
             />
             <div className="flex gap-2">
-              <Button variant="secondary" onClick={() => setMode(null)}>
+              <Button variant="secondary" onClick={() => setUiMode(null)}>
                 Cancel
               </Button>
               <Button
                 disabled={busy || !reason.trim()}
-                onClick={() => act(mode === "reject" ? "rejected" : "queried", reason)}
+                onClick={() =>
+                  act(
+                    uiMode === "reject"
+                      ? mode === "fundFinal"
+                        ? "owner_rejected"
+                        : "rejected"
+                      : "queried",
+                    reason
+                  )
+                }
               >
-                Confirm {mode}
+                Confirm {uiMode}
               </Button>
             </div>
           </div>

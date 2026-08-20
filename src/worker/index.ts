@@ -4,6 +4,7 @@ import { businessDateIST, closeBusinessDay } from "@/lib/versioning/day-close";
 import { registerAiJobs } from "./ai-jobs";
 import { registerScheduleJobs } from "./schedule-jobs";
 import { registerAuditJobs } from "./audit-jobs";
+import { registerReminderJobs } from "./reminder-jobs";
 
 // Node-side background jobs (Postgres-backed queue — no Redis).
 // The Python photogrammetry worker is separate: it polls scan_jobs directly.
@@ -25,8 +26,9 @@ async function main() {
   await registerScheduleJobs(boss);
   await registerAuditJobs(boss);
   await registerAiJobs(boss);
+  await registerReminderJobs(boss);
 
-  console.log("Worker started: day-close, schedule, audit, AI queues active");
+  console.log("Worker started: day-close, schedule, audit, AI, reminder queues active");
 }
 
 main().catch((err) => {

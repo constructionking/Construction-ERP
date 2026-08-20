@@ -67,6 +67,23 @@ Tests: `pnpm test:unit` (no DB), `pnpm test:integration` (needs DB).
    bills), misrepresentation vs measurement book, arithmetic errors, billed
    qty exceeding work order / BOQ.
 
+## Notifications & the fund chain
+
+- User-facing alerts go through `notifyUsers()` in `src/lib/notify.ts` — it
+  writes the in-app notification AND fires web push (`src/lib/push.ts`,
+  VAPID keys in env; degrades to in-app-only without them). Never call
+  `prisma.notification.createMany` directly.
+- Fund requisitions follow a three-step chain, derived from the append-only
+  `approval_actions` log in `src/lib/requisitions.ts` (`deriveState`):
+  engineer raises (push → accounts) → accounts approves (push → owner,
+  state `awaiting_owner`) → owner `owner_approved` (push → accounts,
+  `awaiting_release`) → accounts `released` (terminal, push → engineer).
+  Transition legality lives in `ACCOUNTS_FUND_ACTIONS` / `OWNER_FUND_ACTIONS`
+  and is enforced in the actions route. Material requests stay single-step
+  (owner decides).
+- Daily 6 pm IST reminder (`src/worker/reminder-jobs.ts`) nudges engineers
+  who haven't recorded consumption for the day.
+
 ## Conventions
 
 - Dates that are business dates use `@db.Date` and the `yyyy-mm-dd` string

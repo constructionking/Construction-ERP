@@ -21,27 +21,20 @@ export const POST = withApi(async (req: NextRequest) => {
     data: { ...data, status: "submitted", createdById: ctx.userId },
   });
 
-  // Route the notification to the right approver group.
+  // Route the alert (in-app + device push) to the right approver group.
   const site = await prisma.site.findUnique({ where: { id: data.siteId } });
+  const { notifyUsers, ownerUserIds, siteRoleUserIds } = await import("@/lib/notify");
   if (data.kind === "fund") {
-    const approvers = await prisma.siteRole.findMany({
-      where: { siteId: data.siteId, role: "accounts" },
-    });
-    await prisma.notification.createMany({
-      data: approvers.map((a) => ({
-        userId: a.userId,
-        title: `Fund request · ${site?.code ?? ""}`,
-        body: `${ctx.name} requests ${formatINRCompact(Number(requisition.amountTotal ?? 0))} — ${data.justification.slice(0, 120)}`,
-      })),
+    await notifyUsers(await siteRoleUserIds(data.siteId, "accounts"), {
+      title: `💰 Fund request ${formatINRCompact(Number(requisition.amountTotal ?? 0))} · ${site?.code ?? ""}`,
+      body: `${ctx.name}: ${data.justification.slice(0, 140)}`,
+      url: "/approvals",
     });
   } else {
-    const owners = await prisma.user.findMany({ where: { isOwner: true, isActive: true } });
-    await prisma.notification.createMany({
-      data: owners.map((o) => ({
-        userId: o.id,
-        title: `Material request · ${site?.code ?? ""}`,
-        body: `${ctx.name} raised a material requisition — ${data.justification.slice(0, 120)}`,
-      })),
+    await notifyUsers(await ownerUserIds(), {
+      title: `Material request · ${site?.code ?? ""}`,
+      body: `${ctx.name} raised a material requisition — ${data.justification.slice(0, 140)}`,
+      url: `/dashboard/${data.siteId}/approvals`,
     });
   }
 

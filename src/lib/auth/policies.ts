@@ -55,6 +55,9 @@ export const policies = {
   // go to the owner in Phase 1 (purchase department arrives in Phase 2).
   "requisition.approve.fund": { roles: ["accounts"], scope: "site" },
   "requisition.approve.material": { owner: true },
+  // Final say on money going out: after accounts approves a fund request it
+  // lands with the owner; only after owner approval can accounts release.
+  "requisition.finalApprove": { owner: true },
   "requisition.view.fund": { roles: ["accounts"], scope: "site" },
 
   // --- amendments (window + actor rules applied on top by the versioning engine) ---

@@ -39,17 +39,41 @@ const STATE_TONES: Record<string, "neutral" | "green" | "amber" | "red" | "blue"
   resubmitted: "blue",
   approved: "green",
   partially_approved: "green",
+  awaiting_owner: "amber",
+  awaiting_release: "green",
+  owner_rejected: "red",
+  released: "green",
   rejected: "red",
   queried: "amber",
   queued: "neutral",
 };
 
+const STATE_LABELS: Record<string, string> = {
+  awaiting_owner: "with owner",
+  awaiting_release: "ready to release",
+  owner_rejected: "owner rejected",
+};
+
 export function ApprovalQueue({ items }: { items: QueueItem[] }) {
-  const pending = items.filter((i) => ["pending", "resubmitted"].includes(i.state));
-  const decided = items.filter((i) => !["pending", "resubmitted"].includes(i.state));
+  const pending = items.filter((i) => ["pending", "resubmitted", "queued"].includes(i.state));
+  const toRelease = items.filter((i) => i.state === "awaiting_release");
+  const rest = items.filter(
+    (i) => !["pending", "resubmitted", "queued", "awaiting_release"].includes(i.state)
+  );
 
   return (
     <div className="space-y-4">
+      {toRelease.length > 0 ? (
+        <>
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-emerald-700">
+            ✅ Owner approved — release the funds ({toRelease.length})
+          </h2>
+          {toRelease.map((item) => (
+            <QueueCard key={item.entityId} item={item} releasable />
+          ))}
+        </>
+      ) : null}
+
       <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
         Awaiting your decision ({pending.length})
       </h2>
@@ -60,18 +84,26 @@ export function ApprovalQueue({ items }: { items: QueueItem[] }) {
       )}
 
       <h2 className="pt-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
-        Recently decided
+        In progress & decided
       </h2>
-      {decided.length === 0 ? (
+      {rest.length === 0 ? (
         <EmptyState title="No decisions yet" />
       ) : (
-        decided.slice(0, 10).map((item) => <QueueCard key={item.entityId} item={item} />)
+        rest.slice(0, 12).map((item) => <QueueCard key={item.entityId} item={item} />)
       )}
     </div>
   );
 }
 
-function QueueCard({ item, decidable }: { item: QueueItem; decidable?: boolean }) {
+function QueueCard({
+  item,
+  decidable,
+  releasable,
+}: {
+  item: QueueItem;
+  decidable?: boolean;
+  releasable?: boolean;
+}) {
   const router = useRouter();
   const [mode, setMode] = useState<null | "approve" | "partial" | "reject" | "query" | "queue">(
     null
@@ -115,7 +147,7 @@ function QueueCard({ item, decidable }: { item: QueueItem; decidable?: boolean }
             </p>
           </div>
           <Badge tone={STATE_TONES[item.state] ?? "neutral"}>
-            {item.state.replace("_", " ")}
+            {STATE_LABELS[item.state] ?? item.state.replace(/_/g, " ")}
             {item.version > 1 ? ` · v${item.version}` : ""}
           </Badge>
         </div>
@@ -143,12 +175,23 @@ function QueueCard({ item, decidable }: { item: QueueItem; decidable?: boolean }
           </div>
         ) : null}
 
+        {releasable ? (
+          <div className="mt-4">
+            <Button variant="success" disabled={busy} onClick={() => act("released")}>
+              💸 Release funds
+            </Button>
+            {error ? (
+              <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+            ) : null}
+          </div>
+        ) : null}
+
         {decidable ? (
           <div className="mt-4">
             {mode === null ? (
               <div className="flex flex-wrap gap-2">
                 <Button variant="success" disabled={busy} onClick={() => act("approved")}>
-                  Approve
+                  Approve → owner
                 </Button>
                 <Button variant="secondary" disabled={busy} onClick={() => setMode("partial")}>
                   Partial

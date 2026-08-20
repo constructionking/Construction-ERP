@@ -24,13 +24,65 @@ export default async function OwnerApprovalsPage({
   const materialPending = items.filter(
     (i) => i.requisition.kind === "material" && ["pending", "resubmitted"].includes(i.state)
   );
-  const fundAll = items.filter((i) => i.requisition.kind === "fund");
+  const fundAwaitingOwner = items.filter(
+    (i) => i.requisition.kind === "fund" && i.state === "awaiting_owner"
+  );
+  const fundAll = items.filter(
+    (i) => i.requisition.kind === "fund" && i.state !== "awaiting_owner"
+  );
   const decided = items.filter(
     (i) => i.requisition.kind === "material" && !["pending", "resubmitted"].includes(i.state)
   );
 
   return (
     <div className="space-y-4">
+      {fundAwaitingOwner.length > 0 ? (
+        <Card className="border-amber-300">
+          <CardHeader>
+            <CardTitle>
+              💰 Fund requests awaiting YOUR final approval ({fundAwaitingOwner.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-xs text-slate-500">
+              Accounts has verified these. Your approval sends them back to accounts for the
+              actual release of funds.
+            </p>
+            {fundAwaitingOwner.map(({ requisition, actions, state }) => {
+              const accountsCall = actions[actions.length - 1];
+              const approvedAmount =
+                accountsCall?.approvedAmount !== null && accountsCall
+                  ? Number(accountsCall.approvedAmount)
+                  : Number(requisition.amountTotal ?? 0);
+              return (
+                <OwnerRequisitionCard
+                  key={requisition.entityId}
+                  mode="fundFinal"
+                  entityId={requisition.entityId}
+                  state={state}
+                  raisedBy={userById.get(requisition.createdById) ?? "Engineer"}
+                  createdAt={requisition.createdAt.toISOString()}
+                  justification={requisition.justification}
+                  lines={[
+                    ...(requisition.lines as { head: string; amount: number }[]).map((line) => ({
+                      label: line.head,
+                      value: formatINR(line.amount),
+                    })),
+                    {
+                      label:
+                        accountsCall?.action === "partially_approved"
+                          ? "Accounts cleared (partial)"
+                          : "Accounts cleared",
+                      value: formatINR(approvedAmount),
+                    },
+                  ]}
+                />
+              );
+            })}
+          </CardContent>
+        </Card>
+      ) : null}
+
       <Card>
         <CardHeader>
           <CardTitle>Material requests awaiting your decision ({materialPending.length})</CardTitle>
@@ -61,7 +113,7 @@ export default async function OwnerApprovalsPage({
 
       <Card>
         <CardHeader>
-          <CardTitle>Fund requests (decided by Accounts — view only)</CardTitle>
+          <CardTitle>Fund request pipeline</CardTitle>
         </CardHeader>
         <CardContent>
           {fundAll.length === 0 ? (
@@ -89,14 +141,18 @@ export default async function OwnerApprovalsPage({
                   </div>
                   <Badge
                     tone={
-                      state === "approved" || state === "partially_approved"
+                      state === "released"
                         ? "green"
-                        : state === "rejected"
-                          ? "red"
-                          : "blue"
+                        : state === "awaiting_release"
+                          ? "amber"
+                          : state === "rejected" || state === "owner_rejected"
+                            ? "red"
+                            : "blue"
                     }
                   >
-                    {state.replace("_", " ")}
+                    {state === "awaiting_release"
+                      ? "release pending"
+                      : state.replace(/_/g, " ")}
                   </Badge>
                 </div>
               ))}

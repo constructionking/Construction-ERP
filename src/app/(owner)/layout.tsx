@@ -3,6 +3,7 @@ import Link from "next/link";
 import { pageCtx } from "@/lib/auth/page-guard";
 import { prisma } from "@/lib/db";
 import { SignOutButton } from "@/components/SignOutButton";
+import { EnablePushButton } from "@/components/EnablePushButton";
 
 export default async function OwnerLayout({ children }: { children: React.ReactNode }) {
   const ctx = await pageCtx();
@@ -39,6 +40,7 @@ export default async function OwnerLayout({ children }: { children: React.ReactN
                 </span>
               ) : null}
             </Link>
+            <EnablePushButton />
             <SignOutButton />
           </div>
         </div>

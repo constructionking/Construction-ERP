@@ -126,17 +126,15 @@ export async function runMbAnomalyReview(mbVersionRowId: string): Promise<number
   });
 
   if (parsed.data.remarks.length > 0) {
-    const owners = await prisma.user.findMany({ where: { isOwner: true, isActive: true } });
     const site = await prisma.site.findUnique({ where: { id: book.siteId } });
-    await prisma.notification.createMany({
-      data: owners.map((owner) => ({
-        userId: owner.id,
-        title: `MB review: ${parsed.data.remarks.length} advisory note(s) · ${site?.code ?? ""}`,
-        body: parsed.data.remarks
-          .slice(0, 3)
-          .map((r) => `${r.sr_no ? `line ${r.sr_no}: ` : ""}${r.note}`)
-          .join(" · "),
-      })),
+    const { notifyUsers, ownerUserIds } = await import("@/lib/notify");
+    await notifyUsers(await ownerUserIds(), {
+      title: `MB review: ${parsed.data.remarks.length} advisory note(s) · ${site?.code ?? ""}`,
+      body: parsed.data.remarks
+        .slice(0, 3)
+        .map((r) => `${r.sr_no ? `line ${r.sr_no}: ` : ""}${r.note}`)
+        .join(" · "),
+      url: `/dashboard/${book.siteId}`,
     });
   }
 

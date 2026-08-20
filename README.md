@@ -23,7 +23,12 @@ owner; a focused approvals queue for accounts.
   photogrammetry (scale marker), engineer accept/reject with variance
   reported to owner; shape-template fallback; LiDAR-ready scan API.
 - **Requisitions** — material/fund requests routed to the right approver,
-  append-only decision log, mandatory reasons on rejection.
+  append-only decision log, mandatory reasons on rejection. Fund requests
+  run a three-step chain: accounts approves → owner final approval →
+  accounts releases the money, with a push notification at every hand-off.
+- **Push notifications (PWA)** — device push for fund-request hand-offs,
+  audit flags and a daily 6 pm reminder to engineers who haven't entered
+  consumption. Enable per device via the 🔔 button; set VAPID keys in .env.
 - **Departmental labour** — day-rate (morning market) vs period (contractor)
   entries, owner benchmarks per mtr/CUM/sqm, cost-overrun flags.
 - **Audit engine** — consumption variance, labour cost, contractor delay,

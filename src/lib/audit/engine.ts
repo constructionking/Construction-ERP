@@ -59,17 +59,15 @@ export async function raiseFlag(input: FlagInput) {
     },
   });
 
-  // Notify owners on first raise or reopen only (not every re-evaluation).
+  // Notify owners (in-app + push) on first raise or reopen only.
   const isNew = !existing || existing.status === "resolved";
   if (isNew) {
-    const owners = await prisma.user.findMany({ where: { isOwner: true, isActive: true } });
-    await prisma.notification.createMany({
-      data: owners.map((owner) => ({
-        userId: owner.id,
-        flagId: flag.id,
-        title: input.title,
-        body: input.body,
-      })),
+    const { notifyUsers, ownerUserIds } = await import("@/lib/notify");
+    await notifyUsers(await ownerUserIds(), {
+      title: input.title,
+      body: input.body,
+      url: `/dashboard/${input.siteId}`,
+      flagId: flag.id,
     });
   }
 

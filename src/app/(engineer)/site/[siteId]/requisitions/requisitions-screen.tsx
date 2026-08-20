@@ -46,9 +46,20 @@ const STATE_TONES: Record<string, "neutral" | "green" | "amber" | "red" | "blue"
   resubmitted: "blue",
   approved: "green",
   partially_approved: "green",
+  awaiting_owner: "blue",
+  awaiting_release: "amber",
+  released: "green",
+  owner_rejected: "red",
   rejected: "red",
   queried: "amber",
   queued: "neutral",
+};
+
+const STATE_LABELS: Record<string, string> = {
+  awaiting_owner: "with owner",
+  awaiting_release: "release pending",
+  owner_rejected: "owner rejected",
+  released: "funds released",
 };
 
 export function RequisitionsScreen({
@@ -107,7 +118,7 @@ export function RequisitionsScreen({
                   </p>
                 </div>
                 <Badge tone={STATE_TONES[item.state] ?? "neutral"}>
-                  {item.state.replace("_", " ")}
+                  {STATE_LABELS[item.state] ?? item.state.replace(/_/g, " ")}
                   {item.version > 1 ? ` · v${item.version}` : ""}
                 </Badge>
               </div>

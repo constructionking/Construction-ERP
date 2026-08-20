@@ -3,6 +3,7 @@ import { pageCtx } from "@/lib/auth/page-guard";
 import { listRequisitionsWithState } from "@/lib/requisitions";
 import { prisma } from "@/lib/db";
 import { SignOutButton } from "@/components/SignOutButton";
+import { EnablePushButton } from "@/components/EnablePushButton";
 import { ApprovalQueue } from "./approval-queue";
 
 export default async function ApprovalsPage() {
@@ -33,7 +34,10 @@ export default async function ApprovalsPage() {
             </p>
             <h1 className="text-base font-semibold text-slate-900">Fund allocation requests</h1>
           </div>
-          <SignOutButton />
+          <div className="flex items-center gap-3">
+            <EnablePushButton />
+            <SignOutButton />
+          </div>
         </div>
       </header>
       <main className="px-3 py-4">

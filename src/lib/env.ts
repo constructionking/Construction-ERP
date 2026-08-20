@@ -12,6 +12,10 @@ const envSchema = z.object({
   S3_SECRET_ACCESS_KEY: z.string().optional().default(""),
   ANTHROPIC_API_KEY: z.string().optional().default(""),
   DAY_CLOSE_TZ_OFFSET_MINUTES: z.coerce.number().default(330),
+  // Web push (PWA). Empty = push disabled; in-app notifications still work.
+  VAPID_PUBLIC_KEY: z.string().optional().default(""),
+  VAPID_PRIVATE_KEY: z.string().optional().default(""),
+  VAPID_SUBJECT: z.string().optional().default("mailto:admin@example.com"),
 });
 
 export const env = envSchema.parse(process.env);

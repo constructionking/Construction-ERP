@@ -4,7 +4,8 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { withApi } from "@/lib/api";
 import { createSessionToken, sessionCookieOptions, SESSION_COOKIE } from "@/lib/auth/session";
-import { checkLockout, recordAttempt } from "@/lib/auth/lockout";
+import { withLoginGate } from "@/lib/auth/lockout";
+import { clientIp } from "@/lib/auth/client-ip";
 
 const loginSchema = z.object({
   identifier: z.string().min(1).max(200), // email or phone
@@ -18,17 +19,12 @@ const DUMMY_HASH = bcrypt.hashSync("timing-equalizer-dummy-password", 12);
 export const POST = withApi(async (req: NextRequest) => {
   const { identifier, password } = loginSchema.parse(await req.json());
   const normalized = identifier.toLowerCase().trim();
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "local";
+  const ip = clientIp(req);
 
-  // Durable, DB-backed brute-force brake (per account + per IP).
-  const lock = await checkLockout(normalized, ip);
-  if (lock.locked) {
-    return NextResponse.json(
-      { error: "Too many failed attempts. Try again later." },
-      { status: 429, headers: { "Retry-After": String(lock.retryAfterSeconds) } }
-    );
-  }
-
+  // Resolve the user up-front so the lockout is keyed on the canonical account
+  // id — an attacker cannot get two independent failure buckets by alternating
+  // the same person's email and phone. Unknown user → a stable per-identifier
+  // key so brute force against a non-existent account is still throttled.
   const user = await prisma.user.findFirst({
     where: {
       OR: [{ email: normalized }, { phone: identifier.trim() }],
@@ -36,12 +32,22 @@ export const POST = withApi(async (req: NextRequest) => {
     },
     include: { siteRoles: true },
   });
+  const lockKey = user ? `uid:${user.id}` : `id:${normalized}`;
 
-  const ok = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH);
+  const gate = await withLoginGate(lockKey, ip, () =>
+    // bcrypt runs inside the per-account advisory lock; the dummy hash keeps
+    // timing constant when the user does not exist.
+    bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH)
+  );
 
-  await recordAttempt(normalized, ip, Boolean(user && ok));
+  if (gate.status === "locked") {
+    return NextResponse.json(
+      { error: "Too many failed attempts. Try again later." },
+      { status: 429, headers: { "Retry-After": String(gate.retryAfterSeconds) } }
+    );
+  }
 
-  if (!user || !ok) {
+  if (!user || !gate.ok) {
     // Generic message either way — no signal about which part was wrong.
     return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
   }

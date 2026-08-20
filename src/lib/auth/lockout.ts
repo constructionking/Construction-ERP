@@ -80,3 +80,62 @@ export async function recordAttempt(
       .catch(() => {});
   }
 }
+
+export type LoginGateResult =
+  | { status: "locked"; retryAfterSeconds: number }
+  | { status: "done"; ok: boolean };
+
+/**
+ * Atomic login gate — the ONLY correct path for the login route.
+ *
+ * A Postgres per-identifier advisory lock (`pg_advisory_xact_lock`) serializes
+ * all concurrent attempts for the SAME account, closing the parallel
+ * brute-force window where N simultaneous requests each read a stale
+ * "under threshold" count before any of them records a failure. Attempts for
+ * different accounts take different lock keys and never contend. The password
+ * verification runs inside the lock so the recorded count is always consistent
+ * with the decision.
+ */
+export async function withLoginGate(
+  identifier: string,
+  ip: string,
+  verify: () => Promise<boolean>
+): Promise<LoginGateResult> {
+  return prisma.$transaction(
+    async (tx) => {
+      // Serialize on this account; different accounts don't block each other.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${identifier}))`;
+
+      const now = new Date();
+      const since = new Date(now.getTime() - 24 * 3600 * 1000);
+      const [accountAttempts, ipFailures] = await Promise.all([
+        tx.loginAttempt.findMany({
+          where: { identifier, createdAt: { gte: since } },
+          orderBy: { createdAt: "desc" },
+          take: 50,
+          select: { success: true, createdAt: true },
+        }),
+        tx.loginAttempt.count({
+          where: {
+            ip,
+            success: false,
+            createdAt: { gte: new Date(now.getTime() - IP_WINDOW_MS) },
+          },
+        }),
+      ]);
+
+      if (ipFailures >= IP_FAILURE_THRESHOLD) {
+        return { status: "locked", retryAfterSeconds: Math.ceil(IP_LOCK_MS / 1000) };
+      }
+      const lock = evaluateAccountLock(accountAttempts, now);
+      if (lock.locked) {
+        return { status: "locked", retryAfterSeconds: lock.retryAfterSeconds };
+      }
+
+      const ok = await verify();
+      await tx.loginAttempt.create({ data: { identifier, ip, success: ok } });
+      return { status: "done", ok };
+    },
+    { timeout: 15000 }
+  );
+}

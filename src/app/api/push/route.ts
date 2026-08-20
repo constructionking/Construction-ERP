@@ -15,12 +15,31 @@ export const GET = withApi(async () => {
   });
 });
 
+// Push endpoints belong to the browser vendors' push services. Restricting to
+// their domains stops a curious user registering an internal URL to make the
+// server POST to it (blind SSRF).
+const ALLOWED_PUSH_HOSTS = [
+  /\.googleapis\.com$/, // FCM (Chrome/Android)
+  /\.push\.apple\.com$/, // Safari/iOS
+  /\.notify\.windows\.com$/, // Edge/Windows
+  /\.push\.services\.mozilla\.com$/, // Firefox
+  /\.mozilla\.com$/,
+];
+
 const subscribeSchema = z.object({
   endpoint: z
     .string()
     .url()
     .max(1000)
-    .refine((u) => u.startsWith("https://"), "Push endpoints must be https"),
+    .refine((u) => u.startsWith("https://"), "Push endpoints must be https")
+    .refine((u) => {
+      try {
+        const host = new URL(u).hostname;
+        return ALLOWED_PUSH_HOSTS.some((re) => re.test(host));
+      } catch {
+        return false;
+      }
+    }, "Unrecognized push service"),
   keys: z.object({
     p256dh: z.string().min(1).max(300),
     auth: z.string().min(1).max(200),

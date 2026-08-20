@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { testDb, resetDb, makeUser, makeSite } from "../helpers/db";
 import { deriveState } from "@/lib/requisitions";
 import { releaseLog } from "@/lib/reports/releases";
-import { checkLockout, recordAttempt } from "@/lib/auth/lockout";
+import { checkLockout, recordAttempt, withLoginGate } from "@/lib/auth/lockout";
 
 let siteId: string;
 let engineerId: string;
@@ -125,5 +125,26 @@ describe("durable login lockout", () => {
     for (let i = 0; i < 3; i++) await recordAttempt(id, "7.7.7.7", false);
     const lock = await checkLockout(id, "7.7.7.7");
     expect(lock.locked).toBe(false);
+  });
+
+  it("PARALLEL wrong guesses cannot exceed the threshold (advisory-lock race closed)", async () => {
+    const id = "parallel@test";
+    // Fire 30 simultaneous failing attempts for one account.
+    const results = await Promise.all(
+      Array.from({ length: 30 }, () =>
+        withLoginGate(id, "6.6.6.6", async () => false)
+      )
+    );
+    const admitted = results.filter((r) => r.status === "done").length;
+    const locked = results.filter((r) => r.status === "locked").length;
+    // At most the threshold (5) get past the gate; the rest are locked out.
+    expect(admitted).toBeLessThanOrEqual(5);
+    expect(locked).toBeGreaterThanOrEqual(25);
+  });
+
+  it("the gate admits a correct password and does not lock a clean account", async () => {
+    const id = "cleanlogin@test";
+    const r = await withLoginGate(id, "5.5.5.5", async () => true);
+    expect(r).toEqual({ status: "done", ok: true });
   });
 });

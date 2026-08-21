@@ -1,0 +1,32 @@
+# ---------------------------------------------------------------------------
+# Construction ERP — Node worker image.
+#
+# Runs the pg-boss background worker (`pnpm worker`): day-close (23:59 IST),
+# schedule/forecast, audit sweep, AI jobs, and the 6 pm consumption reminder.
+#
+# The same image is reused for one-off admin commands, because it carries the
+# full toolchain (tsx + Prisma CLI + source + tsconfig path aliases):
+#   - prisma migrate deploy          (apply migrations + immutability triggers)
+#   - pnpm tsx scripts/bootstrap-owner.ts   (create the first owner)
+#   - scripts/backup.sh / restore.sh (pg_dump lives in the postgres client)
+# ---------------------------------------------------------------------------
+FROM node:20-bookworm-slim
+
+# openssl for Prisma; postgresql-client gives pg_dump/psql for backups/restore.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      openssl ca-certificates postgresql-client tar gzip \
+  && rm -rf /var/lib/apt/lists/*
+RUN corepack enable && corepack prepare pnpm@9 --activate
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# Full install (tsx + prisma CLI are devDependencies the worker needs).
+COPY package.json pnpm-lock.yaml* ./
+RUN pnpm install --frozen-lockfile
+
+COPY . .
+RUN pnpm prisma generate
+
+CMD ["pnpm", "worker"]

@@ -1,0 +1,121 @@
+# Construction ERP — production stack (single server).
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Reads secrets/config from `.env` in this directory (see .env.production.example).
+# Everything runs on one VM: Caddy (TLS) -> web (Next.js) + Node worker + Python
+# photogrammetry worker + Postgres. Uploads and DB live on named volumes.
+
+services:
+  # ---- Edge: automatic HTTPS reverse proxy --------------------------------
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - web
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      APP_HOST: ${APP_HOST}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  # ---- Database -----------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-erp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-construction_erp}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-erp} -d ${POSTGRES_DB:-construction_erp}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ---- One-shot: apply migrations + immutability triggers, then exit ------
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: construction-erp-worker:local
+    restart: "no"
+    command: ["pnpm", "prisma", "migrate", "deploy"]
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ---- Web (Next.js) ------------------------------------------------------
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: construction-erp-web:local
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - storage:/app/storage
+    healthcheck:
+      test:
+        ["CMD", "node", "-e",
+         "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # ---- Node background worker (pg-boss cron jobs) -------------------------
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: construction-erp-worker:local
+    restart: unless-stopped
+    command: ["pnpm", "worker"]
+    env_file: .env
+    volumes:
+      - storage:/app/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # ---- Python photogrammetry worker (LiDAR/stockpile scans) ---------------
+  worker-photogrammetry:
+    build: ./worker-photogrammetry
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      STORAGE_DIR: /storage
+    volumes:
+      - storage:/storage
+    # CPU-cap the scan engine so a 5–15 min reconstruction can't starve the app.
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:
+  storage:
+  caddy_data:
+  caddy_config:

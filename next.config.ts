@@ -35,6 +35,9 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  // Emit a self-contained server bundle in `.next/standalone` so the production
+  // Docker image can run without the full node_modules tree (see Dockerfile).
+  output: "standalone",
   experimental: {
     serverActions: {
       bodySizeLimit: "25mb",

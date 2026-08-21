@@ -1,0 +1,32 @@
+# Construction ERP — edge reverse proxy (automatic HTTPS).
+#
+# $APP_HOST is set in .env and can be EITHER:
+#   - a free host:   203.0.113.10.sslip.io   or   yoursite.duckdns.org
+#   - your own domain: erp.yourcompany.com
+# Caddy fetches and renews a real Let's Encrypt certificate for whatever it is,
+# as long as that hostname's DNS points at this server and ports 80/443 are open.
+#
+# Switching free -> own domain later = change APP_HOST in .env, then
+#   docker compose -f docker-compose.prod.yml up -d caddy
+#
+# $ACME_EMAIL is optional (recommended for expiry notices); leave blank to skip.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$APP_HOST} {
+	encode zstd gzip
+
+	reverse_proxy web:3000 {
+		# The app's login lockout trusts X-Real-IP (see src/lib/auth/client-ip.ts).
+		# Caddy OVERWRITES it with the real client address, so a client cannot
+		# spoof it — inbound values from the browser are replaced here.
+		header_up X-Real-IP {remote_host}
+	}
+
+	# Uploads (photos, measurement books, scan frames) can be large.
+	request_body {
+		max_size 30MB
+	}
+}

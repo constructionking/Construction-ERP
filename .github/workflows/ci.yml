@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: erp
+          POSTGRES_PASSWORD: erp_ci_password
+          POSTGRES_DB: construction_erp_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U erp -d construction_erp_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      # env.ts requires a 32+ char AUTH_SECRET and a DATABASE_URL at import time.
+      AUTH_SECRET: ci_auth_secret_at_least_32_chars_long_xx
+      DATABASE_URL: postgresql://erp:erp_ci_password@localhost:5432/construction_erp_test
+      TEST_DATABASE_URL: postgresql://erp:erp_ci_password@localhost:5432/construction_erp_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Prisma generate + validate
+        run: |
+          pnpm prisma generate
+          pnpm prisma validate
+
+      - name: Apply migrations (incl. immutability triggers) to test DB
+        run: pnpm prisma migrate deploy
+
+      - name: Build
+        run: pnpm build
+
+      - name: Unit + integration tests
+        run: pnpm test
+
+      - name: Audit production dependencies
+        run: pnpm audit --prod

@@ -110,11 +110,12 @@ docker compose -f docker-compose.prod.yml ps  # all services "running"/"healthy"
 > server. **If the server is destroyed and you have no off-server copy, data
 > since your last off-server backup is lost.** Do all three of the following.
 
-**1. Nightly on-box backup (built in).** Schedule it with cron:
+**1. Nightly on-box backup (built in).** Schedule it with cron — minimal cloud
+images (e.g. GCP Ubuntu) don't ship cron, so install it first; the root crontab
+is used because the script drives Docker:
 ```bash
-crontab -e
-# add:
-0 2 * * * cd /opt/construction-erp && ./scripts/backup.sh >> /var/log/erp-backup.log 2>&1
+sudo apt-get update && sudo apt-get install -y cron
+( sudo crontab -l 2>/dev/null; echo '0 2 * * * cd /opt/construction-erp && ./scripts/backup.sh >> /var/log/erp-backup.log 2>&1' ) | sudo crontab -
 ```
 Backups (14-day retention) land in `/opt/construction-erp/backups`.
 

@@ -25,8 +25,9 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
 # Full install (tsx + prisma CLI are devDependencies the worker needs).
+# --prod=false: NODE_ENV=production would otherwise make pnpm skip dev deps.
 COPY package.json pnpm-lock.yaml* ./
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile --prod=false
 
 COPY . .
 RUN pnpm prisma generate

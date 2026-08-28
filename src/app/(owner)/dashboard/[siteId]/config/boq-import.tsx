@@ -182,14 +182,27 @@ export function BoqImport({ siteId }: { siteId: string }) {
       <CardContent>
         {phase === "idle" || phase === "uploading" ? (
           <div className="flex flex-wrap items-center gap-3">
+            {/* Hidden input: the button opens the system file picker itself,
+                and parsing starts as soon as a file is chosen. */}
             <input
               ref={fileRef}
               type="file"
               accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-              className="text-sm"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files?.[0]) void upload();
+              }}
             />
-            <Button onClick={upload} disabled={phase === "uploading"}>
-              {phase === "uploading" ? "Reading BOQ…" : "Upload & detect items"}
+            <Button
+              onClick={() => {
+                // Clear first so picking the SAME file again still fires
+                // onChange (e.g. retry after a failed read).
+                if (fileRef.current) fileRef.current.value = "";
+                fileRef.current?.click();
+              }}
+              disabled={phase === "uploading"}
+            >
+              {phase === "uploading" ? "Reading BOQ…" : "Choose BOQ file (.xlsx)"}
             </Button>
             {summary ? <Badge tone="green">{summary}</Badge> : null}
           </div>

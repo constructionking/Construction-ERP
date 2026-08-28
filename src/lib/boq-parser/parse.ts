@@ -91,11 +91,19 @@ export function parseQtyValue(v: unknown): number | null {
 // Header detection & column mapping
 
 const DESC_HEADER = /desc|particular|item of work|scope|nature of work/;
-const QTY_HEADER = /^qty\.?$|quantity|^qnty/;
-const UNIT_HEADER = /^unit$|^uom$|^units$/;
-const ITEMNO_HEADER = /item\s*no|s\.?\s*no|sr\.?\s*no|sl\.?\s*no|^code$|^item$/;
+// "Item" is ambiguous: it is the DESCRIPTION column in some layouts
+// (Item | Nos | Qty) but the NUMBER column in others (Item | Description).
+// Resolved in a post-pass: description wins only when nothing else claims it.
+const ITEM_AMBIGUOUS = /^items?$/;
+const QTY_HEADER = /^qty\b\.?|quantity|^qnty/;
+const UNIT_HEADER = /^unit\b|^uom\b|^units\b/;
+const ITEMNO_HEADER = /item\s*no|s\.?\s*no|sr\.?\s*no|sl\.?\s*no|^code$/;
 // Word-bounded: "Particulars" ends in "rs" and must NOT read as money.
 const MONEY_HEADER = /\brate\b|\bamount\b|\bcost\b|\bprice\b|\bvalue\b|\brs\.?(?![a-z])|₹|\binr\b/;
+// A qty header like "Qty (Pipes)" is a COUNT; when a Length column exists the
+// running-metre length is the real quantity (unit column says Rm/Mtr).
+const QTY_IS_COUNT = /pipe|\bnos\b|count|number/;
+const LENGTH_HEADER = /^length\b/;
 
 interface ColumnMap {
   itemNo: number | null;
@@ -120,7 +128,7 @@ function scoreHeaderRow(texts: Map<number, string>): { score: number; hasDesc: b
   let hasQty = false;
   for (const t of texts.values()) {
     const low = t.toLowerCase();
-    if (DESC_HEADER.test(low)) { score += 2; hasDesc = true; }
+    if (DESC_HEADER.test(low) || ITEM_AMBIGUOUS.test(low)) { score += 2; hasDesc = true; }
     if (QTY_HEADER.test(low)) { score += 2; hasQty = true; }
     if (UNIT_HEADER.test(low)) score += 1;
     if (ITEMNO_HEADER.test(low)) score += 1;
@@ -152,9 +160,38 @@ function mapColumns(ws: ExcelJS.Worksheet, headerRow: number, warnings: string[]
     const low = t.toLowerCase();
     if (MONEY_HEADER.test(low)) { excluded.add(col); continue; } // rates never ingested
     if (map.desc === null && DESC_HEADER.test(low)) { map.desc = col; continue; }
-    if (map.qty === null && QTY_HEADER.test(low)) { map.qty = col; continue; }
+    // Unit before qty: "Unit of Quantity" must land on unit, not qty.
     if (map.unit === null && UNIT_HEADER.test(low)) { map.unit = col; continue; }
+    if (map.qty === null && QTY_HEADER.test(low)) { map.qty = col; continue; }
     if (map.itemNo === null && ITEMNO_HEADER.test(low)) { map.itemNo = col; continue; }
+  }
+
+  // Ambiguous "Item" header: description if the sheet has no description
+  // column, otherwise the item-number column.
+  for (const [col, t] of headers) {
+    if (excluded.has(col)) continue;
+    if ([map.itemNo, map.desc, map.qty, map.unit].includes(col)) continue;
+    if (ITEM_AMBIGUOUS.test(t.toLowerCase())) {
+      if (map.desc === null) map.desc = col;
+      else if (map.itemNo === null) map.itemNo = col;
+    }
+  }
+
+  // "Qty (Pipes)"-style count columns: when a Length column exists beside it,
+  // the length in running metres is the real quantity of pipe-laying work.
+  if (map.qty !== null) {
+    const qtyHeader = headers.get(map.qty)?.toLowerCase() ?? "";
+    if (QTY_IS_COUNT.test(qtyHeader)) {
+      for (const [col, t] of headers) {
+        if (col !== map.qty && !excluded.has(col) && LENGTH_HEADER.test(t.toLowerCase())) {
+          warnings.push(
+            `Sheet "${ws.name}": quantity column "${headers.get(map.qty)}" looks like a count — using "${t}" as the quantity instead; verify on the review screen`,
+          );
+          map.qty = col;
+          break;
+        }
+      }
+    }
   }
 
   // Content sniffing fills the gaps on sheets with odd/missing header names.
@@ -257,10 +294,22 @@ export async function parseBoqWorkbook(buffer: Buffer): Promise<BoqParseResult> 
       const unitRaw = cols.unit !== null ? (texts.get(cols.unit) ?? null) : null;
       const itemNo = cols.itemNo !== null ? (texts.get(cols.itemNo) ?? null) : null;
 
-      if (!desc && qtyRaw === null && unitRaw === null) continue;
-      if (desc && SUMMARY_ROW.test(desc)) continue;
+      if (!desc && qtyRaw === null && unitRaw === null && !itemNo) continue;
+      // Sub-total / carried-forward text can sit in ANY column (real sheets
+      // park "Total ... in CUM" in a dimension column beside the number).
+      if ([...texts.values()].some((t) => SUMMARY_ROW.test(t))) continue;
 
       const qty = qtyRaw !== null ? parseQtyValue(qtyRaw) : null;
+
+      // Merged banner rows ("BLOCK - A", "EXCAVATION") repeat one text across
+      // every column → section heading.
+      if (qty === null && texts.size >= 2) {
+        const values = [...texts.values()];
+        if (values.every((t) => t === values[0])) {
+          sectionPath = [values[0].trim()];
+          continue;
+        }
+      }
 
       // Merged description cells repeat the master's text on continuation
       // rows; a repeat with no qty of its own is not a new item.
@@ -271,12 +320,13 @@ export async function parseBoqWorkbook(buffer: Buffer): Promise<BoqParseResult> 
         sectionPath = [desc.trim()];
         continue;
       }
-      if (!desc) {
-        if (qty !== null) {
-          warnings.push(`Sheet "${ws.name}" row ${r}: quantity without a description — skipped`);
-        }
+      if (!desc && itemNo && qty === null && !unitRaw && !/\d/.test(itemNo)) {
+        // Heading text parked in the item-number column ("CONCRETE",
+        // "EXCAVATION/SOIL-WORK") — digit-free, so never a real item number.
+        sectionPath = [itemNo.trim()];
         continue;
       }
+      if (!desc) continue; // numeric-only subtotal rows etc. — silently skip
       if (qty === null) continue; // desc + unit but no usable qty: not a line item
 
       rows.push({

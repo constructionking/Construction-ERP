@@ -5,16 +5,20 @@ import type { ActivityCategory } from "@prisma/client";
 // columns" and "Shuttering to RCC slab" both mention concrete terms.
 
 export const CATEGORY_KEYWORDS: Array<{ category: ActivityCategory; pattern: RegExp }> = [
-  { category: "reinforcement", pattern: /reinforc|bar bending|\btmt\b|fe\s?-?\s?500|fe\s?-?\s?415|steel bar|rebar|binding wire/i },
-  { category: "shuttering", pattern: /shutter|form\s?work|centering|centring|staging|scaffold/i },
+  // "\bbbs\b" = bar bending schedule sheets.
+  { category: "reinforcement", pattern: /reinforc|bar bending|\bbbs\b|\btmt\b|fe\s?-?\s?500|fe\s?-?\s?415|steel bar|rebar|binding wire/i },
+  // "shutt" (not "shutter") also catches the very common "Shuttring" typo.
+  { category: "shuttering", pattern: /shutt|form\s?work|centering|centring|staging|scaffold/i },
   { category: "concreting", pattern: /\brcc\b|\bpcc\b|concret|\bm\s?-?\s?(10|15|20|25|30|35|40)\b|cement concrete|grouting|screed/i },
-  { category: "earthwork", pattern: /excavat|earth\s?work|filling|back\s?fill|soling|anti[- ]?termite|levell?ing|murrum|compaction|dewatering/i },
+  // "excv" catches the frequent "Excvation" typo; dressing is site prep.
+  { category: "earthwork", pattern: /excav|excv|earth\s?work|dressing|filling|back\s?fill|soling|anti[- ]?termite|levell?ing|murrum|compaction|dewatering/i },
   { category: "masonry", pattern: /brick|block\s?work|masonry|stone work|\baac\b|rubble/i },
   { category: "plaster", pattern: /plaster|pointing|neeru|gypsum punning/i },
   { category: "waterproofing", pattern: /water\s?proof|damp proof|\bdpc\b|membrane|injection grout/i },
   { category: "flooring", pattern: /floor|tile|tiling|granite|marble|kota|skirting|dado|vitrified|paver/i },
   { category: "finishes", pattern: /paint|putty|primer|distemper|polish|texture|white\s?wash|finish|emulsion|enamel/i },
-  { category: "external", pattern: /compound wall|paving|drain|landscap|external|road work|kerb|sewer|manhole/i },
+  // Pipe / water-supply infrastructure is site-external work.
+  { category: "external", pattern: /compound wall|paving|drain|landscap|external|road work|kerb|sewer|manhole|pipe|pipeline|\bhdpe\b|\bcpvc\b|\bupvc\b|\bdwc\b|water supply/i },
 ];
 
 export function classifyRow(input: {
@@ -22,12 +26,14 @@ export function classifyRow(input: {
   sectionPath: string[];
   sheetName: string;
 }): ActivityCategory {
-  const haystacks = [input.description, input.sectionPath.join(" "), input.sheetName];
-  for (const hay of haystacks) {
-    if (!hay) continue;
-    for (const { category, pattern } of CATEGORY_KEYWORDS) {
-      if (pattern.test(hay)) return category;
-    }
+  // One combined haystack so the PRIORITY list wins across fields: an item
+  // "for Wall footing PCC" under a "Shuttring…" section must classify as
+  // shuttering (higher priority) even though its own text only says PCC.
+  const hay = [input.description, input.sectionPath.join(" "), input.sheetName]
+    .filter(Boolean)
+    .join(" ");
+  for (const { category, pattern } of CATEGORY_KEYWORDS) {
+    if (pattern.test(hay)) return category;
   }
   return "general";
 }

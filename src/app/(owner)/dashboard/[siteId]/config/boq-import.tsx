@@ -168,6 +168,7 @@ export function BoqImport({ siteId }: { siteId: string }) {
   const included = rows.filter((r) => r.include);
   const blocking = included.filter((r) => rowProblem(r) !== null);
   const groups = [...new Set(rows.map((r) => r.category))];
+  const sheetNames = [...new Set(rows.map((r) => r.sheetName))];
 
   return (
     <Card className="mb-6">
@@ -209,6 +210,41 @@ export function BoqImport({ siteId }: { siteId: string }) {
               <Badge tone="blue">{included.length} of {rows.length} items selected</Badge>
               {aiUsed ? <Badge tone="neutral">AI-assisted grouping — review each row</Badge> : null}
             </div>
+
+            {sheetNames.length > 1 ? (
+              // Workbooks often carry design VARIANTS as separate sheets —
+              // let the owner keep one variant with a single click.
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="text-xs text-slate-500">Sheets:</span>
+                {sheetNames.map((s) => {
+                  const anyOn = rows.some((r) => r.sheetName === s && r.include);
+                  return (
+                    <label
+                      key={s}
+                      className={cn(
+                        "flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1 text-xs",
+                        anyOn
+                          ? "border-brand-300 bg-brand-50 text-brand-800"
+                          : "border-slate-300 bg-slate-50 text-slate-400",
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={anyOn}
+                        onChange={(e) =>
+                          setRows((prev) =>
+                            prev.map((r) =>
+                              r.sheetName === s ? { ...r, include: e.target.checked } : r,
+                            ),
+                          )
+                        }
+                      />
+                      {s} ({rows.filter((r) => r.sheetName === s).length})
+                    </label>
+                  );
+                })}
+              </div>
+            ) : null}
 
             {groups.map((cat) => {
               const groupRows = rows.filter((r) => r.category === cat);

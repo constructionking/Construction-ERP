@@ -2,7 +2,9 @@ node_modules/
 .next/
 out/
 build/
-storage/
+# Uploaded files live in /storage at the repo root ONLY — the leading slash
+# keeps this from also ignoring the src/lib/storage source directory.
+/storage/
 *.tsbuildinfo
 next-env.d.ts
 .env
@@ -13,5 +15,6 @@ test-results/
 playwright-report/
 __pycache__/
 *.pyc
+.pytest_cache/
 worker-photogrammetry/.venv/
 .DS_Store

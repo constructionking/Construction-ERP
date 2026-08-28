@@ -16,7 +16,9 @@ FROM node:20-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
       openssl ca-certificates postgresql-client tar gzip \
   && rm -rf /var/lib/apt/lists/*
-RUN corepack enable && corepack prepare pnpm@9 --activate
+# Global pnpm install (not corepack): works identically for the non-root
+# runtime user, with no per-user cache or network needed at container start.
+RUN npm install -g pnpm@9
 WORKDIR /app
 
 ENV NODE_ENV=production
@@ -28,5 +30,12 @@ RUN pnpm install --frozen-lockfile
 
 COPY . .
 RUN pnpm prisma generate
+
+# Run as the same non-root uid as the web image (1001) so files the two
+# containers share on the storage volume stay mutually readable/writable.
+RUN groupadd --system --gid 1001 nodejs \
+  && useradd --system --create-home --uid 1001 --gid nodejs nextjs \
+  && mkdir -p /app/storage && chown -R nextjs:nodejs /app/storage
+USER nextjs
 
 CMD ["pnpm", "worker"]

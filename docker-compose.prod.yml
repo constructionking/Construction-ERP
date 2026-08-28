@@ -6,9 +6,21 @@
 # Everything runs on one VM: Caddy (TLS) -> web (Next.js) + Node worker + Python
 # photogrammetry worker + Postgres. Uploads and DB live on named volumes.
 
+# Applied to every service: processes cannot gain privileges (blocks setuid
+# escalation), and container logs rotate so runaway output can't fill the disk.
+x-hardened: &hardened
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
 services:
   # ---- Edge: automatic HTTPS reverse proxy --------------------------------
   caddy:
+    <<: *hardened
     image: caddy:2
     restart: unless-stopped
     depends_on:
@@ -26,6 +38,7 @@ services:
 
   # ---- Database -----------------------------------------------------------
   postgres:
+    <<: *hardened
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
@@ -42,6 +55,7 @@ services:
 
   # ---- One-shot: apply migrations + immutability triggers, then exit ------
   migrate:
+    <<: *hardened
     build:
       context: .
       dockerfile: Dockerfile.worker
@@ -55,6 +69,7 @@ services:
 
   # ---- Web (Next.js) ------------------------------------------------------
   web:
+    <<: *hardened
     build:
       context: .
       dockerfile: Dockerfile
@@ -79,6 +94,7 @@ services:
 
   # ---- Node background worker (pg-boss cron jobs) -------------------------
   worker:
+    <<: *hardened
     build:
       context: .
       dockerfile: Dockerfile.worker
@@ -96,6 +112,7 @@ services:
 
   # ---- Python photogrammetry worker (LiDAR/stockpile scans) ---------------
   worker-photogrammetry:
+    <<: *hardened
     build: ./worker-photogrammetry
     restart: unless-stopped
     environment:

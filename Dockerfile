@@ -23,6 +23,12 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN pnpm prisma generate
 ENV NEXT_TELEMETRY_DISABLED=1
+# Build-time-only placeholders: src/lib/env.ts validates env at import while
+# Next collects page data. Nothing connects to a DB during the build, and the
+# runtime container reads the REAL values from .env — these are never used to
+# serve traffic and are not baked into responses.
+ENV DATABASE_URL="postgresql://build:build@localhost:5432/build" \
+    AUTH_SECRET="build-time-placeholder-never-used-at-runtime"
 RUN pnpm build
 
 # ---- runner: minimal image running the standalone server -------------------

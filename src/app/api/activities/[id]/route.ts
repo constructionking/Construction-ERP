@@ -3,23 +3,11 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { withApi } from "@/lib/api";
 import { guard, ApiError } from "@/lib/auth/guard";
-import { unitEnum } from "@/lib/versioning/schemas";
+import { categoryEnum, unitEnum } from "@/lib/versioning/schemas";
 
 const patchSchema = z.object({
   name: z.string().trim().min(2).max(200).optional(),
-  category: z
-    .enum([
-      "earthwork",
-      "concreting",
-      "masonry",
-      "plaster",
-      "waterproofing",
-      "flooring",
-      "finishes",
-      "external",
-      "general",
-    ])
-    .optional(),
+  category: categoryEnum.optional(),
   boqQty: z.number().positive().nullable().optional(),
   unit: unitEnum.optional(),
   productivityNormQtyPerDay: z.number().positive().nullable().optional(),

@@ -72,6 +72,8 @@ enum SiteStatus {
 enum ActivityCategory {
   earthwork
   concreting
+  reinforcement
+  shuttering
   masonry
   plaster
   waterproofing

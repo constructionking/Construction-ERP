@@ -9,6 +9,9 @@ export const MONSOON_MONTHS_DEFAULT = [6, 7, 8, 9]; // June–September
 export const MONSOON_MULTIPLIERS_DEFAULT: Record<ActivityCategory, number> = {
   earthwork: 0.4,
   concreting: 0.6,
+  // Bar bending proceeds under cover; shuttering suffers like masonry.
+  reinforcement: 0.9,
+  shuttering: 0.8,
   masonry: 0.8,
   plaster: 0.8,
   waterproofing: 0.5,

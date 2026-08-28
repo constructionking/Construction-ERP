@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { withApi } from "@/lib/api";
 import { guard } from "@/lib/auth/guard";
-import { unitEnum } from "@/lib/versioning/schemas";
+import { categoryEnum, unitEnum } from "@/lib/versioning/schemas";
 
 export const GET = withApi(async (_req, params) => {
   const siteId = params.siteId;
@@ -25,19 +25,7 @@ const createSchema = z.object({
     .regex(/^[A-Z0-9._-]+$/i),
   name: z.string().trim().min(2).max(200),
   parentId: z.string().uuid().optional(),
-  category: z
-    .enum([
-      "earthwork",
-      "concreting",
-      "masonry",
-      "plaster",
-      "waterproofing",
-      "flooring",
-      "finishes",
-      "external",
-      "general",
-    ])
-    .default("general"),
+  category: categoryEnum.default("general"),
   boqQty: z.number().positive().optional(),
   unit: unitEnum.optional(),
   productivityNormQtyPerDay: z.number().positive().optional(),

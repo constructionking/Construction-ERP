@@ -47,7 +47,7 @@ const VALID_UNITS = new Set(["CUM", "SQM", "MTR", "NOS", "KG", "BAG", "TON"]);
 const QTY_TOLERANCE = 0.01; // 1%
 
 /** Extract a scalar from a cell, resolving cached formula results. */
-function cellScalar(cell: ExcelJS.Cell): unknown {
+export function cellScalar(cell: ExcelJS.Cell): unknown {
   const v = cell.value;
   if (v === null || v === undefined) return null;
   if (typeof v === "object") {
@@ -60,13 +60,13 @@ function cellScalar(cell: ExcelJS.Cell): unknown {
   return v;
 }
 
-function asText(v: unknown): string | null {
+export function asText(v: unknown): string | null {
   if (v === null || v === undefined) return null;
   const s = String(v).trim();
   return s.length ? s : null;
 }
 
-function asNumber(v: unknown): number | null {
+export function asNumber(v: unknown): number | null {
   if (v === null || v === undefined || v === "") return null;
   const n = typeof v === "number" ? v : Number(String(v).trim());
   return Number.isFinite(n) ? n : null;

@@ -12,6 +12,21 @@ const uuid = z.string().uuid();
 
 export const unitEnum = z.enum(["CUM", "SQM", "MTR", "BAG", "NOS", "KG", "TON"]);
 
+// Mirrors prisma's ActivityCategory — single zod source for every route.
+export const categoryEnum = z.enum([
+  "earthwork",
+  "concreting",
+  "reinforcement",
+  "shuttering",
+  "masonry",
+  "plaster",
+  "waterproofing",
+  "flooring",
+  "finishes",
+  "external",
+  "general",
+]);
+
 export const progressEntrySchema = z
   .object({
     siteId: uuid,

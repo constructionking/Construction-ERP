@@ -17,6 +17,7 @@ import {
   Th,
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import { BoqImport } from "./boq-import";
 
 interface ActivityRow {
   id: string;
@@ -58,8 +59,8 @@ interface PolicyRow {
 }
 
 const CATEGORIES = [
-  "earthwork", "concreting", "masonry", "plaster", "waterproofing",
-  "flooring", "finishes", "external", "general",
+  "earthwork", "concreting", "reinforcement", "shuttering", "masonry",
+  "plaster", "waterproofing", "flooring", "finishes", "external", "general",
 ];
 const UNITS = ["CUM", "SQM", "MTR", "BAG", "NOS", "KG", "TON"];
 const WINDOWS = ["until_day_close", "same_day", "until_actioned", "never"];
@@ -174,6 +175,7 @@ function ActivitiesSection({
 
   return (
     <div className="space-y-4">
+      <BoqImport siteId={siteId} />
       <Card>
         <CardHeader>
           <CardTitle>Activity list — BOQ quantities drive the schedule & audits</CardTitle>

@@ -8,7 +8,10 @@ import { evaluateContractorDelay } from "@/lib/audit/rules/contractor-delay";
 import { raiseFlag, autoResolveFlag } from "@/lib/audit/engine";
 import { businessDateIST, dateOnly } from "@/lib/versioning/day-close";
 
-export async function runScheduleSuggestion(siteId: string, config?: Partial<MonsoonConfig>) {
+export async function runScheduleSuggestion(
+  siteId: string,
+  config?: Partial<MonsoonConfig> & { startDate?: string }
+) {
   const site = await prisma.site.findUnique({
     where: { id: siteId },
     // Leaves only: main-activity headings are never scheduled — their Gantt
@@ -19,6 +22,17 @@ export async function runScheduleSuggestion(siteId: string, config?: Partial<Mon
   if (site.activities.length === 0) {
     throw new ApiError(400, "Define the activity list (WBS) before suggesting a schedule");
   }
+
+  // An explicitly chosen project start date sticks to the site, so every
+  // regeneration (and the dashboards) model from the same day.
+  if (config?.startDate) {
+    await prisma.site.update({
+      where: { id: siteId },
+      data: { startDate: new Date(config.startDate) },
+    });
+  }
+  const startIso =
+    config?.startDate ?? (site.startDate ? dateOnly(site.startDate) : businessDateIST());
 
   const monsoonConfig: MonsoonConfig = {
     months: config?.months ?? DEFAULT_MONSOON_CONFIG.months,
@@ -34,7 +48,7 @@ export async function runScheduleSuggestion(siteId: string, config?: Partial<Mon
   );
 
   const dates = suggestSchedule({
-    siteStartIso: site.startDate ? dateOnly(site.startDate) : businessDateIST(),
+    siteStartIso: startIso,
     activities: site.activities.map((a) => ({
       id: a.id,
       category: a.category,

@@ -2,7 +2,11 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input } from "@/components/ui";
+import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Label } from "@/components/ui";
+
+function todayIST(): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
+}
 
 interface ActivityInfo {
   id: string;
@@ -34,23 +38,31 @@ export function ScheduleReview({
   activities,
   suggestion,
   hasBaseline,
+  siteStartDate,
 }: {
   siteId: string;
   activities: ActivityInfo[];
   suggestion: SuggestionData | null;
   hasBaseline: boolean;
+  siteStartDate: string | null;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [dates, setDates] = useState<Record<string, { start: string; end: string }>>({});
+  // Owner picks ONE date; the model computes everything forward from it.
+  const [startDate, setStartDate] = useState(siteStartDate ?? todayIST());
 
   async function generate() {
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`/api/sites/${siteId}/schedule/suggest`, { method: "POST" });
+      const res = await fetch(`/api/sites/${siteId}/schedule/suggest`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(startDate ? { startDate } : {}),
+      });
       const data = await res.json();
       if (!res.ok) {
         setError(data.error ?? "Could not generate a suggestion");
@@ -112,14 +124,24 @@ export function ScheduleReview({
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-sm text-slate-600">
-          The app computes dates from each activity&apos;s BOQ quantity ÷ daily productivity norm,
-          walking the dependency chain and slowing work through monsoon months (June–September).
-          Review every date — accept it or correct it — then lock. After lock-in the dates are
-          followed and cannot be edited.
+          Pick the project start date — the app models every activity&apos;s dates forward from
+          it (BOQ quantity ÷ daily productivity norm, walking the dependency chain and slowing
+          work through monsoon months, June–September). All dates come pre-filled; correct only
+          the ones you disagree with, then lock. After lock-in the dates are followed and cannot
+          be edited.
         </p>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="secondary" disabled={busy} onClick={generate}>
-            {busy ? "Working…" : suggestion ? "Regenerate suggestion" : "Suggest schedule"}
+        <div className="flex flex-wrap items-end gap-3">
+          <div>
+            <Label>Project start date</Label>
+            <Input
+              type="date"
+              className="w-44"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+            />
+          </div>
+          <Button variant="secondary" disabled={busy || !startDate} onClick={generate}>
+            {busy ? "Working…" : suggestion ? "Re-model from this date" : "Suggest schedule"}
           </Button>
           {suggestion && !reviewing ? (
             <Button disabled={busy} onClick={startReview}>

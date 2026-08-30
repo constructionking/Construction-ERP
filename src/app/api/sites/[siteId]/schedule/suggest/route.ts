@@ -6,6 +6,8 @@ import { runScheduleSuggestion } from "@/lib/schedule/service";
 
 const bodySchema = z
   .object({
+    // Project start date: the whole model is computed forward from this day.
+    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     months: z.array(z.number().int().min(1).max(12)).optional(),
     multipliers: z.record(z.string(), z.number().min(0).max(1)).optional(),
   })

@@ -11,7 +11,7 @@ export default async function GanttPage({ params }: { params: Promise<{ siteId: 
   const { siteId } = await params;
   await requireSiteRolePage(siteId, []);
 
-  const [activities, baseline, suggestion] = await Promise.all([
+  const [activities, baseline, suggestion, site] = await Promise.all([
     prisma.activity.findMany({ where: { siteId }, orderBy: { sequence: "asc" } }),
     getCurrentBaseline(siteId),
     prisma.scheduleSuggestion.findFirst({
@@ -19,6 +19,7 @@ export default async function GanttPage({ params }: { params: Promise<{ siteId: 
       orderBy: { generatedAt: "desc" },
       include: { dates: true },
     }),
+    prisma.site.findUnique({ where: { id: siteId }, select: { startDate: true } }),
   ]);
 
   const [forecasts, progressTotals] = await Promise.all([
@@ -131,6 +132,7 @@ export default async function GanttPage({ params }: { params: Promise<{ siteId: 
       <ScheduleReview
         siteId={siteId}
         hasBaseline={baseline !== null}
+        siteStartDate={site?.startDate ? dateOnly(site.startDate) : null}
         activities={activities.map((a) => ({
           id: a.id,
           code: a.code,

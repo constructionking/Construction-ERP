@@ -14,6 +14,12 @@ export const POST = withApi(async (req: NextRequest) => {
   if (!activity || activity.siteId !== data.siteId) {
     throw new ApiError(400, "Activity does not belong to this site");
   }
+  if (activity.isGroup) {
+    throw new ApiError(
+      400,
+      `"${activity.name}" is a main activity heading — record progress against a specific work item under it`,
+    );
+  }
   if (activity.unit && activity.unit !== data.unit) {
     throw new ApiError(400, `This activity is measured in ${activity.unit}`);
   }

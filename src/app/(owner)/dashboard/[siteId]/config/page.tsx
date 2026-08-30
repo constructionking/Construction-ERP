@@ -32,6 +32,8 @@ export default async function ConfigPage({ params }: { params: Promise<{ siteId:
         id: a.id,
         code: a.code,
         name: a.name,
+        isGroup: a.isGroup,
+        parentId: a.parentId,
         category: a.category,
         boqQty: a.boqQty?.toString() ?? "",
         unit: a.unit ?? "",

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Badge,
@@ -23,6 +23,8 @@ interface ActivityRow {
   id: string;
   code: string;
   name: string;
+  isGroup: boolean;
+  parentId: string | null;
   category: string;
   boqQty: string;
   unit: string;
@@ -135,9 +137,62 @@ function ActivitiesSection({
     norm: "",
     contractorName: "",
     dependsOn: "" as string,
+    parentId: "" as string, // "This item is under…" main activity
   });
+  const [groupName, setGroupName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resetConfirm, setResetConfirm] = useState("");
+
+  const groups = activities.filter((a) => a.isGroup);
+  const leaves = activities.filter((a) => !a.isGroup);
+
+  async function addGroup(e: React.FormEvent) {
+    e.preventDefault();
+    if (!groupName.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const code = `MA-${groupName.toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 14) || "GROUP"}`;
+      const res = await fetch(`/api/sites/${siteId}/activities`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: code.slice(0, 20),
+          name: groupName.trim(),
+          isGroup: true,
+          category: "general",
+          sequence: activities.length + 1,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "Could not create main activity");
+        return;
+      }
+      setGroupName("");
+      router.refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resetAll() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/sites/${siteId}/activities/reset`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "Could not delete");
+        return;
+      }
+      setResetConfirm("");
+      router.refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -157,6 +212,7 @@ function ActivitiesSection({
           sequence: activities.length + 1,
           contractorName: form.contractorName || undefined,
           dependsOn: form.dependsOn ? [{ predecessorId: form.dependsOn, lagDays: 0 }] : [],
+          parentId: form.parentId || undefined,
         }),
       });
       const data = await res.json();
@@ -194,25 +250,74 @@ function ActivitiesSection({
               </tr>
             </thead>
             <tbody>
-              {activities.map((a) => (
-                <tr key={a.id}>
-                  <Td className="font-medium">{a.code}</Td>
-                  <Td>{a.name}</Td>
-                  <Td>
-                    <Badge tone="neutral">{a.category}</Badge>
-                  </Td>
-                  <Td className="text-right">
-                    {a.boqQty ? `${Number(a.boqQty).toLocaleString("en-IN")} ${a.unit}` : "—"}
-                  </Td>
-                  <Td className="text-right">{a.norm || "—"}</Td>
-                  <Td>{a.contractorName || <span className="text-slate-400">deptl</span>}</Td>
-                  <Td className="text-xs text-slate-400">
-                    {a.dependsOn.map((id) => activityById.get(id)?.code).filter(Boolean).join(", ") || "—"}
-                  </Td>
-                </tr>
-              ))}
+              {/* Grouped: each main activity as a header row, its items indented. */}
+              {[...groups, null].map((g) => {
+                const children = leaves.filter((a) => (g ? a.parentId === g.id : !a.parentId));
+                if (g === null && children.length === 0) return null;
+                return (
+                  <React.Fragment key={g?.id ?? "__ungrouped"}>
+                    {g ? (
+                      <tr className="bg-slate-100">
+                        <Td className="font-semibold text-slate-800">{g.code}</Td>
+                        <Td colSpan={5} className="font-semibold text-slate-800">
+                          {g.name}
+                        </Td>
+                        <Td className="text-xs text-slate-500">{children.length} items</Td>
+                      </tr>
+                    ) : groups.length > 0 ? (
+                      <tr className="bg-slate-50">
+                        <Td colSpan={7} className="text-xs font-medium text-slate-500">
+                          Not under any main activity
+                        </Td>
+                      </tr>
+                    ) : null}
+                    {children.map((a) => (
+                      <tr key={a.id}>
+                        <Td className={cn("font-medium", g ? "pl-6" : undefined)}>{a.code}</Td>
+                        <Td>{a.name}</Td>
+                        <Td>
+                          <Badge tone="neutral">{a.category}</Badge>
+                        </Td>
+                        <Td className="text-right">
+                          {a.boqQty ? `${Number(a.boqQty).toLocaleString("en-IN")} ${a.unit}` : "—"}
+                        </Td>
+                        <Td className="text-right">{a.norm || "—"}</Td>
+                        <Td>{a.contractorName || <span className="text-slate-400">deptl</span>}</Td>
+                        <Td className="text-xs text-slate-400">
+                          {a.dependsOn.map((id) => activityById.get(id)?.code).filter(Boolean).join(", ") || "—"}
+                        </Td>
+                      </tr>
+                    ))}
+                  </React.Fragment>
+                );
+              })}
             </tbody>
           </Table>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Add main activity</CardTitle>
+          <p className="mt-1 text-sm text-slate-500">
+            A label for what the line items below are for — underground tank, STP, boundary
+            wall… Items are then added under it.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={addGroup} className="flex flex-wrap items-end gap-3">
+            <div className="min-w-64 flex-1">
+              <Label>Main activity name</Label>
+              <Input
+                value={groupName}
+                onChange={(e) => setGroupName(e.target.value)}
+                placeholder="e.g. Underground water tank"
+              />
+            </div>
+            <Button type="submit" disabled={busy || !groupName.trim()}>
+              {busy ? "Adding…" : "Add main activity"}
+            </Button>
+          </form>
         </CardContent>
       </Card>
 
@@ -222,6 +327,20 @@ function ActivitiesSection({
         </CardHeader>
         <CardContent>
           <form onSubmit={submit} className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="col-span-2 sm:col-span-4">
+              <Label>This item is under… (main activity)</Label>
+              <Select
+                value={form.parentId}
+                onChange={(e) => setForm({ ...form, parentId: e.target.value })}
+              >
+                <option value="">(no main activity)</option>
+                {groups.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
             <div>
               <Label>Code</Label>
               <Input
@@ -291,7 +410,7 @@ function ActivitiesSection({
                 onChange={(e) => setForm({ ...form, dependsOn: e.target.value })}
               >
                 <option value="">None</option>
-                {activities.map((a) => (
+                {leaves.map((a) => (
                   <option key={a.id} value={a.id}>
                     {a.code} — {a.name}
                   </option>
@@ -309,6 +428,38 @@ function ActivitiesSection({
           </form>
         </CardContent>
       </Card>
+
+      {activities.length > 0 ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-red-700">Start over</CardTitle>
+            <p className="mt-1 text-sm text-slate-500">
+              Deletes the ENTIRE work-item list so you can re-import the BOQ fresh. Only possible
+              while no progress, consumption, measurement book or photo records exist — recorded
+              history is never deleted.
+            </p>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap items-end gap-3">
+              <div>
+                <Label>Type DELETE to confirm</Label>
+                <Input
+                  value={resetConfirm}
+                  onChange={(e) => setResetConfirm(e.target.value)}
+                  placeholder="DELETE"
+                />
+              </div>
+              <Button
+                variant="danger"
+                disabled={busy || resetConfirm !== "DELETE"}
+                onClick={resetAll}
+              >
+                Delete all work items
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
   );
 }

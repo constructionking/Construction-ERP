@@ -14,7 +14,11 @@ export const GET = withApi(async (req: NextRequest) => {
   const site = await prisma.site.findUnique({
     where: { id: siteId },
     include: {
-      activities: { select: { code: true, name: true, unit: true }, orderBy: { sequence: "asc" } },
+      activities: {
+        where: { isGroup: false }, // main-activity headings are not MB targets
+        select: { code: true, name: true, unit: true },
+        orderBy: { sequence: "asc" },
+      },
     },
   });
   if (!site) throw new ApiError(404, "Site not found");

@@ -12,7 +12,7 @@ export default async function DashboardIndex() {
       where: { status: "open" },
       _count: true,
     }),
-    prisma.activity.groupBy({ by: ["siteId"], _count: true }),
+    prisma.activity.groupBy({ by: ["siteId"], _count: true, where: { isGroup: false } }),
   ]);
 
   const openBySite = new Map<string, { warn: number; critical: number }>();

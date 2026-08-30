@@ -26,6 +26,19 @@ export const POST = withApi(async (req: NextRequest, params) => {
   const siteId = params.siteId;
   const ctx = await guard("baseline.lock", { siteId });
   const body = bodySchema.parse(await req.json());
+
+  // Main-activity headings are never baselined — their bars derive from
+  // their children's locked dates.
+  const { prisma } = await import("@/lib/db");
+  const { ApiError } = await import("@/lib/auth/guard");
+  const groups = await prisma.activity.findMany({
+    where: { id: { in: body.activities.map((a) => a.activityId) }, isGroup: true },
+    select: { code: true },
+  });
+  if (groups.length > 0) {
+    throw new ApiError(400, `Main activities cannot be baselined: ${groups.map((g) => g.code).join(", ")}`);
+  }
+
   const baseline = await lockBaseline(siteId, ctx.userId, body.activities, body.note);
   await recomputeForecasts(siteId).catch((err) => console.error("forecast recompute", err));
   return NextResponse.json({ baseline }, { status: 201 });

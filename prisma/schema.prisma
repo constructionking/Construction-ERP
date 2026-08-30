@@ -264,6 +264,9 @@ model Activity {
   code                      String
   name                      String
   parentId                  String?          @db.Uuid
+  // Main activity (structure/work package, e.g. "Boundary wall"): carries no
+  // qty/unit/schedule of its own — trade items reference it via parentId.
+  isGroup                   Boolean          @default(false)
   category                  ActivityCategory @default(general)
   boqQty                    Decimal?         @db.Decimal(14, 3)
   unit                      Unit?

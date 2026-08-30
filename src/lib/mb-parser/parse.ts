@@ -41,6 +41,8 @@ export interface MbParseResult {
 export interface SiteActivityInfo {
   code: string;
   unit: string | null;
+  // Main-activity headings (structures) are never valid MB targets.
+  isGroup?: boolean;
 }
 
 const VALID_UNITS = new Set(["CUM", "SQM", "MTR", "NOS", "KG", "BAG", "TON"]);
@@ -197,6 +199,13 @@ export async function parseMeasurementBook(
           column: "C",
           message: `Unknown activity code "${activityCode}" for this site`,
         });
+      } else if (activity.isGroup) {
+        errors.push({
+          row: r,
+          column: "C",
+          message: `"${activityCode}" is a main activity heading — use one of its work-item codes`,
+        });
+        activity = undefined;
       }
     }
 

@@ -18,6 +18,12 @@ export const POST = withApi(async (req: NextRequest) => {
   if (!activity || activity.siteId !== data.siteId) {
     throw new ApiError(400, "Activity does not belong to this site");
   }
+  if (activity.isGroup) {
+    throw new ApiError(
+      400,
+      `"${activity.name}" is a main activity heading — book consumption against a specific work item under it`,
+    );
+  }
   if (data.mixDesignId) {
     const mix = await prisma.mixDesign.findUnique({ where: { id: data.mixDesignId } });
     if (!mix) throw new ApiError(400, "Unknown mix design");

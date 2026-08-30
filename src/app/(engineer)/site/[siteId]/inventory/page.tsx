@@ -16,9 +16,10 @@ export default async function InventoryPage({
     computeSiteStock(siteId),
     prisma.material.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
     prisma.activity.findMany({
-      where: { siteId },
+      // Leaves only: consumption is booked against work items, not headings.
+      where: { siteId, isGroup: false },
       orderBy: { sequence: "asc" },
-      select: { id: true, code: true, name: true },
+      select: { id: true, code: true, name: true, parent: { select: { name: true } } },
     }),
     prisma.mixDesign.findMany({ orderBy: { code: "asc" } }),
     prisma.materialReceipt.findMany({

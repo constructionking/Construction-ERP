@@ -30,6 +30,11 @@ export const DELETE = withApi(async (_req, params) => {
   if (!activity) throw new ApiError(404, "Activity not found");
   await guard("activity.manage", { siteId: activity.siteId });
 
+  // A main activity with items must be emptied first (clean 409, not an FK error).
+  const kids = await prisma.activity.count({ where: { parentId: params.id } });
+  if (kids > 0) {
+    throw new ApiError(409, `This main activity still has ${kids} work items — delete or move them first`);
+  }
   // Refuse deletion once progress exists against it — history must survive.
   const used = await prisma.progressEntry.findFirst({ where: { activityId: params.id } });
   if (used) {

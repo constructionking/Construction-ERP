@@ -11,7 +11,9 @@ import { businessDateIST, dateOnly } from "@/lib/versioning/day-close";
 export async function runScheduleSuggestion(siteId: string, config?: Partial<MonsoonConfig>) {
   const site = await prisma.site.findUnique({
     where: { id: siteId },
-    include: { activities: { include: { predecessors: true } } },
+    // Leaves only: main-activity headings are never scheduled — their Gantt
+    // bars are DERIVED as the span of their children.
+    include: { activities: { where: { isGroup: false }, include: { predecessors: true } } },
   });
   if (!site) throw new ApiError(404, "Site not found");
   if (site.activities.length === 0) {

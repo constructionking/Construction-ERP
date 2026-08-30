@@ -14,10 +14,11 @@ import {
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
 
-// BOQ Excel import: upload → the server parses & classifies (nothing is
-// saved) → the owner reviews every detected item here — correcting names,
-// quantities, units, categories — → one Approve creates/updates everything.
-// Same house pattern as the Gantt schedule review: client-side staging only.
+// BOQ Excel import, structured the way a civil engineer reads a BOQ:
+// MAIN activity (structure — "Boundary wall", "Underground tank") → trade
+// items with quantities. Upload → the server parses & groups (nothing saved)
+// → the owner verifies every structure and quantity here → one Approve
+// creates main activities + their items. Client-side staging only.
 
 const CATEGORIES = [
   "earthwork", "concreting", "reinforcement", "shuttering", "masonry",
@@ -30,15 +31,14 @@ interface PreviewItem {
   code: string;
   name: string;
   category: string;
+  structure: string;
   qty: number | null;
   unit: string | null;
   unitRaw: string | null;
-  sectionPath: string[];
   sheetName: string;
   rowNumber: number;
   exists: boolean;
   duplicateInFile: boolean;
-  aiConfidence: number | null;
 }
 
 interface EditableRow {
@@ -49,6 +49,7 @@ interface EditableRow {
   qty: string;
   unit: string; // "" when unmapped → amber row, blocks approval
   category: string;
+  structure: string; // main-activity key (matches an entry in `structures`)
   exists: boolean;
   duplicateInFile: boolean;
   unitRaw: string | null;
@@ -73,6 +74,9 @@ export function BoqImport({ siteId }: { siteId: string }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [phase, setPhase] = useState<Phase>("idle");
   const [rows, setRows] = useState<EditableRow[]>([]);
+  // Structure display names, editable; keys are the original parsed names.
+  const [structureNames, setStructureNames] = useState<Record<string, string>>({});
+  const [structureExists, setStructureExists] = useState<Record<string, boolean>>({});
   const [chainSequence, setChainSequence] = useState(true);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [aiUsed, setAiUsed] = useState(false);
@@ -105,6 +109,7 @@ export function BoqImport({ siteId }: { siteId: string }) {
           qty: it.qty !== null ? String(it.qty) : "",
           unit: it.unit ?? "",
           category: it.category,
+          structure: it.structure,
           exists: it.exists,
           duplicateInFile: it.duplicateInFile,
           unitRaw: it.unitRaw,
@@ -112,6 +117,14 @@ export function BoqImport({ siteId }: { siteId: string }) {
           rowNumber: it.rowNumber,
         })),
       );
+      const names: Record<string, string> = {};
+      const existsMap: Record<string, boolean> = {};
+      for (const s of data.structures as Array<{ name: string; existsAsGroup: boolean }>) {
+        names[s.name] = s.name;
+        existsMap[s.name] = s.existsAsGroup;
+      }
+      setStructureNames(names);
+      setStructureExists(existsMap);
       setWarnings(data.warnings ?? []);
       setAiUsed(Boolean(data.aiUsed));
       setPhase("review");
@@ -127,6 +140,14 @@ export function BoqImport({ siteId }: { siteId: string }) {
 
   async function approve() {
     const included = rows.filter((r) => r.include);
+    // Group by structure, using the (possibly renamed) display names.
+    const byStructure = new Map<string, EditableRow[]>();
+    for (const r of included) {
+      const name = (structureNames[r.structure] ?? r.structure).trim();
+      const list = byStructure.get(name) ?? [];
+      list.push(r);
+      byStructure.set(name, list);
+    }
     setPhase("committing");
     setError(null);
     try {
@@ -135,12 +156,15 @@ export function BoqImport({ siteId }: { siteId: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chainSequence,
-          items: included.map((r) => ({
-            code: r.code.trim(),
-            name: r.name.trim(),
-            category: r.category,
-            boqQty: Number(r.qty),
-            unit: r.unit,
+          structures: [...byStructure.entries()].map(([name, items]) => ({
+            name,
+            items: items.map((r) => ({
+              code: r.code.trim(),
+              name: r.name.trim(),
+              category: r.category,
+              boqQty: Number(r.qty),
+              unit: r.unit,
+            })),
           })),
         }),
       });
@@ -151,9 +175,9 @@ export function BoqImport({ siteId }: { siteId: string }) {
         return;
       }
       setSummary(
-        `${data.created} created, ${data.updated} updated` +
-          (data.dependenciesCreated ? `, ${data.dependenciesCreated} dependencies linked` : "") +
-          (data.skippedDeps ? ` (${data.skippedDeps} links skipped to avoid loops)` : ""),
+        `${data.groupsCreated} main activities + ${data.created} items created` +
+          (data.updated ? `, ${data.updated} updated` : "") +
+          (data.dependenciesCreated ? `, ${data.dependenciesCreated} links` : ""),
       );
       setRows([]);
       setPhase("idle");
@@ -167,7 +191,7 @@ export function BoqImport({ siteId }: { siteId: string }) {
 
   const included = rows.filter((r) => r.include);
   const blocking = included.filter((r) => rowProblem(r) !== null);
-  const groups = [...new Set(rows.map((r) => r.category))];
+  const structureKeys = [...new Set(rows.map((r) => r.structure))];
   const sheetNames = [...new Set(rows.map((r) => r.sheetName))];
 
   return (
@@ -175,15 +199,13 @@ export function BoqImport({ siteId }: { siteId: string }) {
       <CardHeader>
         <CardTitle>Import BOQ from Excel</CardTitle>
         <p className="mt-1 text-sm text-slate-500">
-          Upload the BOQ .xlsx — the app detects the line items, groups them by work type and
-          pre-fills everything. Nothing is saved until you approve the list below.
+          Upload the BOQ .xlsx — the app detects the main activities (tank, wall, STP…) and their
+          line items, and asks you to verify every quantity. Nothing is saved until you approve.
         </p>
       </CardHeader>
       <CardContent>
         {phase === "idle" || phase === "uploading" ? (
           <div className="flex flex-wrap items-center gap-3">
-            {/* Hidden input: the button opens the system file picker itself,
-                and parsing starts as soon as a file is chosen. */}
             <input
               ref={fileRef}
               type="file"
@@ -195,8 +217,6 @@ export function BoqImport({ siteId }: { siteId: string }) {
             />
             <Button
               onClick={() => {
-                // Clear first so picking the SAME file again still fires
-                // onChange (e.g. retry after a failed read).
                 if (fileRef.current) fileRef.current.value = "";
                 fileRef.current?.click();
               }}
@@ -220,13 +240,13 @@ export function BoqImport({ siteId }: { siteId: string }) {
         {phase === "review" || phase === "committing" ? (
           <div className="mt-4 space-y-5">
             <div className="flex flex-wrap items-center gap-3 text-sm">
-              <Badge tone="blue">{included.length} of {rows.length} items selected</Badge>
+              <Badge tone="blue">
+                {structureKeys.length} main activities · {included.length} of {rows.length} items
+              </Badge>
               {aiUsed ? <Badge tone="neutral">AI-assisted grouping — review each row</Badge> : null}
             </div>
 
             {sheetNames.length > 1 ? (
-              // Workbooks often carry design VARIANTS as separate sheets —
-              // let the owner keep one variant with a single click.
               <div className="flex flex-wrap items-center gap-2 text-sm">
                 <span className="text-xs text-slate-500">Sheets:</span>
                 {sheetNames.map((s) => {
@@ -259,8 +279,9 @@ export function BoqImport({ siteId }: { siteId: string }) {
               </div>
             ) : null}
 
-            {groups.map((cat) => {
-              const groupRows = rows.filter((r) => r.category === cat);
+            {structureKeys.map((sk) => {
+              const groupRows = rows.filter((r) => r.structure === sk);
+              const anyOn = groupRows.some((r) => r.include);
               const subtotals = new Map<string, number>();
               for (const r of groupRows) {
                 if (!r.include) continue;
@@ -269,10 +290,30 @@ export function BoqImport({ siteId }: { siteId: string }) {
                 subtotals.set(r.unit, (subtotals.get(r.unit) ?? 0) + qty);
               }
               return (
-                <div key={cat} className="rounded-lg border border-slate-200">
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2">
-                    <span className="text-sm font-semibold capitalize text-slate-800">{cat}</span>
-                    <span className="text-xs text-slate-500">
+                <div key={sk} className="rounded-lg border-2 border-slate-300">
+                  <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-slate-100 px-3 py-2">
+                    <input
+                      type="checkbox"
+                      checked={anyOn}
+                      title="Include this whole main activity"
+                      onChange={(e) =>
+                        setRows((prev) =>
+                          prev.map((r) =>
+                            r.structure === sk ? { ...r, include: e.target.checked } : r,
+                          ),
+                        )
+                      }
+                    />
+                    <Input
+                      value={structureNames[sk] ?? sk}
+                      onChange={(e) =>
+                        setStructureNames((prev) => ({ ...prev, [sk]: e.target.value }))
+                      }
+                      className="w-72 py-1 text-sm font-semibold"
+                      aria-label="Main activity name"
+                    />
+                    {structureExists[sk] ? <Badge tone="amber">existing main activity</Badge> : null}
+                    <span className="ml-auto text-xs text-slate-500">
                       {[...subtotals.entries()]
                         .map(([u, q]) => `${q.toLocaleString("en-IN", { maximumFractionDigits: 2 })} ${u}`)
                         .join(" · ") || "—"}
@@ -285,20 +326,18 @@ export function BoqImport({ siteId }: { siteId: string }) {
                         <div
                           key={r.key}
                           className={cn(
-                            "grid grid-cols-2 gap-2 px-3 py-2 sm:grid-cols-[auto_7rem_1fr_6rem_6rem_8rem]",
+                            "grid grid-cols-2 gap-2 px-3 py-2 sm:grid-cols-[auto_6rem_1fr_5.5rem_5.5rem_7.5rem_9rem]",
                             problem ? "bg-amber-50" : undefined,
                             !r.include ? "opacity-50" : undefined,
                           )}
                         >
-                          <label className="flex items-center gap-2 sm:col-span-1">
+                          <label className="flex items-center gap-2">
                             <input
                               type="checkbox"
                               checked={r.include}
                               onChange={(e) => patch(r.key, { include: e.target.checked })}
                             />
-                            <span className="text-xs text-slate-400">
-                              {r.sheetName} r{r.rowNumber}
-                            </span>
+                            <span className="text-xs text-slate-400">r{r.rowNumber}</span>
                           </label>
                           <Input
                             value={r.code}
@@ -343,10 +382,20 @@ export function BoqImport({ siteId }: { siteId: string }) {
                             value={r.category}
                             onChange={(e) => patch(r.key, { category: e.target.value })}
                             className="py-1.5 text-xs"
-                            aria-label="Category"
+                            aria-label="Trade"
                           >
                             {CATEGORIES.map((c) => (
                               <option key={c} value={c}>{c}</option>
+                            ))}
+                          </Select>
+                          <Select
+                            value={r.structure}
+                            onChange={(e) => patch(r.key, { structure: e.target.value })}
+                            className="py-1.5 text-xs"
+                            aria-label="Main activity"
+                          >
+                            {structureKeys.map((k) => (
+                              <option key={k} value={k}>{structureNames[k] ?? k}</option>
                             ))}
                           </Select>
                         </div>
@@ -364,7 +413,7 @@ export function BoqImport({ siteId }: { siteId: string }) {
                   checked={chainSequence}
                   onChange={(e) => setChainSequence(e.target.checked)}
                 />
-                Chain in sequence (each item starts after the previous finishes)
+                Chain items in sequence within each main activity
               </label>
               <div className="ml-auto flex items-center gap-2">
                 {blocking.length > 0 ? (

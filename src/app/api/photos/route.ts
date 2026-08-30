@@ -52,6 +52,9 @@ export const POST = withApi(async (req: NextRequest) => {
     if (!activity || activity.siteId !== meta.siteId) {
       throw new ApiError(400, "Activity does not belong to this site");
     }
+    if (activity.isGroup) {
+      throw new ApiError(400, "Attach photos to a specific work item, not a main activity heading");
+    }
   }
 
   // Storage-flooding brake: generous cap on uploads per user per day.

@@ -18,9 +18,10 @@ export default async function ProgressPage({
   const today = businessDateIST();
   const [activities, entries] = await Promise.all([
     prisma.activity.findMany({
-      where: { siteId },
+      // Leaves only: main-activity headings are never progress targets.
+      where: { siteId, isGroup: false },
       orderBy: { sequence: "asc" },
-      select: { id: true, code: true, name: true, unit: true },
+      select: { id: true, code: true, name: true, unit: true, parent: { select: { name: true } } },
     }),
     prisma.progressEntry.findMany({
       where: { siteId, isCurrent: true, status: "submitted" },

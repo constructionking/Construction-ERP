@@ -13,7 +13,7 @@ async function loadAndParse(siteId: string, file: File) {
   if (file.size > MAX_MB_BYTES) throw new ApiError(413, "File exceeds 10 MB");
   const site = await prisma.site.findUnique({
     where: { id: siteId },
-    include: { activities: { select: { code: true, unit: true } } },
+    include: { activities: { select: { code: true, unit: true, isGroup: true } } },
   });
   if (!site) throw new ApiError(404, "Site not found");
 

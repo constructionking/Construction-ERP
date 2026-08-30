@@ -7,9 +7,10 @@ import { parseBoqWorkbook } from "@/lib/boq-parser/parse";
 import { classifyRow, assignCodes } from "@/lib/boq-parser/classify";
 import { AI_CATEGORY_CONFIDENCE, refineBoqRows } from "@/lib/ai/boq-classify";
 
-// BOQ Excel → parsed preview for the owner's review screen. Persists NOTHING:
-// the review screen holds the rows client-side and commits the approved set
-// through /api/sites/[siteId]/activities/import.
+// BOQ Excel → parsed preview for the owner's review screen, grouped the way a
+// civil engineer reads a BOQ: MAIN activity (structure/work package) → trade
+// items. Persists NOTHING; the approved set commits through
+// /api/sites/[siteId]/activities/import.
 
 const MAX_BOQ_BYTES = 10 * 1024 * 1024;
 const MAX_ROWS = 500; // keeps the commit payload well under withApi's 1 MB cap
@@ -18,6 +19,7 @@ export interface BoqPreviewItem {
   code: string;
   name: string;
   category: ActivityCategory;
+  structure: string; // main-activity name this item belongs to
   qty: number | null;
   unit: Unit | null;
   unitRaw: string | null;
@@ -27,6 +29,11 @@ export interface BoqPreviewItem {
   exists: boolean; // code already on this site → commit will UPDATE it
   duplicateInFile: boolean;
   aiConfidence: number | null;
+}
+
+export interface BoqPreviewStructure {
+  name: string;
+  existsAsGroup: boolean; // a main activity with this name already exists
 }
 
 export const POST = withApi(async (req: NextRequest, params) => {
@@ -42,7 +49,7 @@ export const POST = withApi(async (req: NextRequest, params) => {
   const { isXlsxBytes } = await import("@/lib/uploads");
   if (!isXlsxBytes(buffer)) throw new ApiError(400, "File content is not a valid .xlsx workbook");
 
-  const parsed = await parseBoqWorkbook(buffer);
+  const parsed = await parseBoqWorkbook(buffer, { fileName: file.name });
   if (!parsed.ok) {
     return NextResponse.json(
       {
@@ -60,8 +67,14 @@ export const POST = withApi(async (req: NextRequest, params) => {
     );
   }
 
-  const existing = await prisma.activity.findMany({ where: { siteId }, select: { code: true } });
-  const existingCodes = new Set(existing.map((a) => a.code.toUpperCase()));
+  const existing = await prisma.activity.findMany({
+    where: { siteId },
+    select: { code: true, name: true, isGroup: true },
+  });
+  const existingCodes = new Set(existing.filter((a) => !a.isGroup).map((a) => a.code.toUpperCase()));
+  const existingGroupNames = new Set(
+    existing.filter((a) => a.isGroup).map((a) => a.name.trim().toLowerCase()),
+  );
 
   // Heuristic classification first — the backbone (AI key may be absent).
   const categories = parsed.rows.map((r) =>
@@ -89,6 +102,7 @@ export const POST = withApi(async (req: NextRequest, params) => {
     code: codes[i].code,
     name: m.name,
     category: m.category,
+    structure: m.row.structure,
     qty: m.row.qty,
     unit: m.unit,
     unitRaw: m.row.unitRaw,
@@ -100,8 +114,19 @@ export const POST = withApi(async (req: NextRequest, params) => {
     aiConfidence: m.aiConfidence,
   }));
 
+  // Structure list in first-appearance order.
+  const structures: BoqPreviewStructure[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    const key = item.structure.trim().toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    structures.push({ name: item.structure, existsAsGroup: existingGroupNames.has(key) });
+  }
+
   return NextResponse.json({
     items,
+    structures,
     sheets: parsed.sheets,
     warnings: parsed.warnings,
     aiUsed: ai !== null,

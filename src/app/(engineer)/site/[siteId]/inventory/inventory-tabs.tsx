@@ -30,6 +30,7 @@ interface ActivityOpt {
   id: string;
   code: string;
   name: string;
+  parent?: { name: string } | null;
 }
 interface MixOpt {
   id: string;
@@ -501,7 +502,7 @@ function ConsumeTab(
                 <option value="">Select activity…</option>
                 {props.activities.map((a) => (
                   <option key={a.id} value={a.id}>
-                    {a.code} — {a.name}
+                    {a.parent ? `${a.parent.name} › ` : ""}{a.code} — {a.name}
                   </option>
                 ))}
               </Select>

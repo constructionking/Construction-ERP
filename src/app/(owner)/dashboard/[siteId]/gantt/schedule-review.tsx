@@ -8,6 +8,8 @@ interface ActivityInfo {
   id: string;
   code: string;
   name: string;
+  isGroup?: boolean;
+  parentId?: string | null;
   category: string;
   boqQty: string | null;
   unit: string | null;
@@ -143,13 +145,24 @@ export function ScheduleReview({
                 </thead>
                 <tbody>
                   {activities
-                    .filter((a) => dates[a.id])
+                    .filter((a) => dates[a.id] || (a.isGroup && activities.some((c) => c.parentId === a.id && dates[c.id])))
                     .map((activity) => {
+                      // Main activities are headings here — their bars derive
+                      // from the children; only leaves carry editable dates.
+                      if (activity.isGroup) {
+                        return (
+                          <tr key={activity.id} className="border-t border-slate-200 bg-slate-50">
+                            <td className="px-3 py-2 font-semibold text-slate-800" colSpan={4}>
+                              {activity.name}
+                            </td>
+                          </tr>
+                        );
+                      }
                       const suggested = suggestionByActivity.get(activity.id);
                       return (
                         <tr key={activity.id} className="border-t border-slate-100">
                           <td className="px-3 py-2">
-                            <span className="font-medium">{activity.code}</span>{" "}
+                            <span className={activity.parentId ? "pl-4 font-medium" : "font-medium"}>{activity.code}</span>{" "}
                             <span className="text-slate-500">{activity.name}</span>
                             {suggested?.monsoonAffected ? (
                               <Badge tone="blue" className="ml-1.5">

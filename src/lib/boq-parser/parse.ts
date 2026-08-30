@@ -1,6 +1,7 @@
 import ExcelJS from "exceljs";
 import type { Unit } from "@prisma/client";
 import { cellScalar, asText } from "@/lib/mb-parser/parse";
+import { CATEGORY_KEYWORDS } from "./classify";
 
 // BOQ workbook parser for MESSY real-world files (every consultant formats
 // differently). Strategy: detect the header row per sheet by scoring header
@@ -18,7 +19,12 @@ export interface BoqCandidateRow {
   qtyRaw: string | null;
   unit: Unit | null; // normalized; null when the sheet's unit is unmappable
   unitRaw: string | null;
-  sectionPath: string[]; // enclosing section-heading texts, outermost first
+  sectionPath: string[]; // enclosing TRADE-section headings
+  // The MAIN activity (structure/work package) this line belongs to —
+  // "Boundary wall", "BLOCK - A", "NP-2 Hume Pipe"… Detected from top-level
+  // item numbers (1.0.0), non-trade banner rows, the workbook title, or the
+  // sheet/file name as fallbacks. Never null after parsing.
+  structure: string;
 }
 
 export interface SheetReport {
@@ -250,12 +256,63 @@ function mapColumns(ws: ExcelJS.Worksheet, headerRow: number, warnings: string[]
 }
 
 // ---------------------------------------------------------------------------
+// Structure (main activity) detection
+
+function isTradeText(text: string): boolean {
+  return CATEGORY_KEYWORDS.some((k) => k.pattern.test(text));
+}
+
+// Top-level item numbers mark structures: "1.0.0", "2.0" — trailing zeros only.
+const STRUCTURE_ITEMNO = /^\d+(\.0+)+$/;
+
+// Title-row junk that must never become a structure name.
+const TITLE_NOISE = /assumption|prepared by|project\s*:|drg|date of|^bill of quantities\s*$|^boq\s*$/i;
+
+/** Human structure name from raw banner/title text. */
+export function cleanStructureName(raw: string): string {
+  let s = raw.trim().replace(/\s+/g, " ");
+  s = s.replace(/^(bill of quantities|bo?\.?q\.?)\b\s*[—:–-]*\s*(for|of)?\s*/i, "");
+  s = s.replace(/\b(boq|estimation|estimate)\s*$/i, "");
+  s = s.trim().replace(/[—:–-]+$/g, "").trim();
+  return (s || raw.trim()).slice(0, 200);
+}
+
+// "BLOCK - A" vs "BLOCK - B": same stem after stripping a short trailing
+// token → sibling structures (the new banner REPLACES the current structure
+// rather than nesting under it).
+function isSiblingStructure(a: string, b: string): boolean {
+  const stem = (t: string) => t.trim().replace(/[\s._–-]*[A-Z0-9]{1,3}$/i, "").trim();
+  const sa = stem(a);
+  const sb = stem(b);
+  return sa.length >= 4 && sa.toLowerCase() === sb.toLowerCase();
+}
+
+/** First meaningful banner/title text ABOVE the header row, if any. */
+function detectSheetTitle(ws: ExcelJS.Worksheet, headerRow: number): string | null {
+  for (let r = 1; r < headerRow; r++) {
+    const texts = rowTexts(ws, r);
+    if (texts.size === 0) continue;
+    const values = [...texts.values()];
+    const isBanner = values.length >= 2 && values.every((t) => t === values[0]);
+    const single = values.length === 1 && values[0].trim().length >= 12;
+    if (!isBanner && !single) continue;
+    const text = values[0].trim();
+    if (TITLE_NOISE.test(text) || isTradeText(text)) continue;
+    return text;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Row extraction
 
 const SUMMARY_ROW =
   /^\s*(sub[\s-]?total|total|grand total|carried (forward|over)|b\/f|c\/f|brought forward|page total|say\b)/i;
 
-export async function parseBoqWorkbook(buffer: Buffer): Promise<BoqParseResult> {
+export async function parseBoqWorkbook(
+  buffer: Buffer,
+  opts: { fileName?: string } = {},
+): Promise<BoqParseResult> {
   const warnings: string[] = [];
   const sheets: SheetReport[] = [];
   const rows: BoqCandidateRow[] = [];
@@ -281,9 +338,12 @@ export async function parseBoqWorkbook(buffer: Buffer): Promise<BoqParseResult> 
       continue;
     }
 
+    const sheetTitle = detectSheetTitle(ws, header.row);
+    const startIdx = rows.length;
     let emitted = 0;
     let sectionPath: string[] = [];
     let prevDesc: string | null = null;
+    let structure: string | null = null; // current MAIN activity
 
     for (let r = header.row + 1; r <= ws.rowCount; r++) {
       const texts = rowTexts(ws, r);
@@ -301,12 +361,22 @@ export async function parseBoqWorkbook(buffer: Buffer): Promise<BoqParseResult> 
 
       const qty = qtyRaw !== null ? parseQtyValue(qtyRaw) : null;
 
-      // Merged banner rows ("BLOCK - A", "EXCAVATION") repeat one text across
-      // every column → section heading.
+      // Merged banner rows repeat one text across every column. Trade-keyword
+      // banners ("EXCAVATION") are sections; others ("BLOCK - A") are
+      // STRUCTURES — a sibling banner replaces the current structure, an
+      // unrelated one nests as a section inside it.
       if (qty === null && texts.size >= 2) {
         const values = [...texts.values()];
         if (values.every((t) => t === values[0])) {
-          sectionPath = [values[0].trim()];
+          const text = values[0].trim();
+          if (isTradeText(text)) {
+            sectionPath = [text];
+          } else if (structure === null || isSiblingStructure(structure, cleanStructureName(text))) {
+            structure = cleanStructureName(text);
+            sectionPath = [];
+          } else {
+            sectionPath = [text];
+          }
           continue;
         }
       }
@@ -316,8 +386,14 @@ export async function parseBoqWorkbook(buffer: Buffer): Promise<BoqParseResult> 
       if (desc && desc === prevDesc && qty === null) continue;
 
       if (desc && qty === null && !unitRaw) {
-        // Text-only row → section heading (single level is enough).
-        sectionPath = [desc.trim()];
+        // Text-only heading row. A top-level item number (1.0.0 / 2.0) marks
+        // a STRUCTURE ("NP-2 Hume Pipe"); anything else is a trade section.
+        if (itemNo && STRUCTURE_ITEMNO.test(itemNo.trim())) {
+          structure = cleanStructureName(desc);
+          sectionPath = [];
+        } else {
+          sectionPath = [desc.trim()];
+        }
         continue;
       }
       if (!desc && itemNo && qty === null && !unitRaw && !/\d/.test(itemNo)) {
@@ -339,9 +415,24 @@ export async function parseBoqWorkbook(buffer: Buffer): Promise<BoqParseResult> 
         unit: normalizeUnit(unitRaw),
         unitRaw,
         sectionPath: [...sectionPath],
+        structure: structure ?? "", // backfilled below when no in-sheet structure
       });
       prevDesc = desc;
       emitted++;
+    }
+
+    // Rows before/without any in-sheet structure heading fall back to the
+    // workbook title above the header (best: "BoQ For Boundary Wall RW as
+    // Arch Design"), else the sheet name, else the uploaded file name.
+    const fallback =
+      (sheetTitle ? cleanStructureName(sheetTitle) : null) ??
+      (wb.worksheets.length > 1
+        ? ws.name
+        : opts.fileName
+          ? cleanStructureName(opts.fileName.replace(/\.[a-z0-9]+$/i, "").replace(/[_-]+/g, " "))
+          : ws.name);
+    for (let i = startIdx; i < rows.length; i++) {
+      if (!rows[i].structure) rows[i].structure = fallback;
     }
 
     sheets.push({

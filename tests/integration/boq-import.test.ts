@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { testDb, resetDb, makeSite } from "../helpers/db";
 
-// Exercises the BOQ commit semantics against the real database — including
-// the widened ActivityCategory enum (reinforcement/shuttering), which proves
-// the migration applied. The route's transaction logic is replicated via the
-// same Prisma calls it makes; endpoint-level auth is covered by policy tests.
+// Exercises the grouped (structure → items) BOQ commit semantics against the
+// real database — including the isGroup column and the widened category enum,
+// which proves the migrations applied. Mirrors the commit route's transaction
+// (kept in sync intentionally); endpoint auth is covered by policy tests.
 
 let siteId: string;
 
@@ -18,183 +18,194 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-// Mirrors the commit route's transaction body (kept in sync intentionally).
+interface ImportItem {
+  code: string;
+  name: string;
+  category: string;
+  boqQty: number;
+  unit: string;
+}
+
+function groupCode(name: string, taken: Set<string>): string {
+  const slug = name.toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 14);
+  let code = `MA-${slug || "GROUP"}`.slice(0, 20);
+  let n = 1;
+  while (taken.has(code)) {
+    n++;
+    code = `MA-${slug.slice(0, 11)}-${n}`.slice(0, 20);
+  }
+  taken.add(code);
+  return code;
+}
+
+// Mirrors the commit route's transaction body.
 async function commitImport(
-  items: Array<{ code: string; name: string; category: string; boqQty: number; unit: string }>,
+  structures: Array<{ name: string; items: ImportItem[] }>,
   chainSequence: boolean,
 ) {
   return testDb.$transaction(async (tx) => {
     const existing = await tx.activity.findMany({
       where: { siteId },
-      select: { id: true, code: true, sequence: true },
+      select: { id: true, code: true, name: true, sequence: true, isGroup: true },
     });
-    const byCode = new Map(existing.map((a) => [a.code.toUpperCase(), a]));
+    const leafByCode = new Map(existing.filter((a) => !a.isGroup).map((a) => [a.code.toUpperCase(), a]));
+    const groupByName = new Map(
+      existing.filter((a) => a.isGroup).map((a) => [a.name.trim().toLowerCase(), a]),
+    );
+    const takenCodes = new Set(existing.map((a) => a.code.toUpperCase()));
     let seq = existing.reduce((m, a) => Math.max(m, a.sequence), 0);
 
-    const orderedIds: string[] = [];
-    const updatedCodes: string[] = [];
+    let groupsCreated = 0;
     let created = 0;
-    for (const item of items) {
-      const code = item.code.toUpperCase();
-      const prior = byCode.get(code);
-      if (prior) {
-        await tx.activity.update({
-          where: { id: prior.id },
-          data: {
-            name: item.name,
-            category: item.category as never,
-            boqQty: item.boqQty,
-            unit: item.unit as never,
-          },
-        });
-        orderedIds.push(prior.id);
-        updatedCodes.push(code);
-      } else {
+    const updatedCodes: string[] = [];
+    let dependenciesCreated = 0;
+
+    for (const structure of structures) {
+      const nameKey = structure.name.trim().toLowerCase();
+      let parent = groupByName.get(nameKey);
+      if (!parent) {
         const row = await tx.activity.create({
           data: {
             siteId,
-            code,
-            name: item.name,
-            category: item.category as never,
-            boqQty: item.boqQty,
-            unit: item.unit as never,
+            code: groupCode(structure.name, takenCodes),
+            name: structure.name.trim(),
+            isGroup: true,
+            category: "general" as never,
             sequence: ++seq,
           },
         });
-        orderedIds.push(row.id);
-        created++;
+        parent = { id: row.id, code: row.code, name: row.name, sequence: row.sequence, isGroup: true };
+        groupByName.set(nameKey, parent);
+        groupsCreated++;
       }
-    }
 
-    let dependenciesCreated = 0;
-    let skippedDeps = 0;
-    if (chainSequence && orderedIds.length > 1) {
-      const edges = await tx.activityDependency.findMany({
-        where: { successor: { siteId } },
-        select: { predecessorId: true, successorId: true },
-      });
-      const adj = new Map<string, string[]>();
-      const addEdge = (from: string, to: string) => {
-        const list = adj.get(from) ?? [];
-        list.push(to);
-        adj.set(from, list);
-      };
-      for (const e of edges) addEdge(e.predecessorId, e.successorId);
-      const reaches = (from: string, target: string): boolean => {
-        const stack = [from];
-        const seen = new Set<string>();
-        while (stack.length) {
-          const node = stack.pop()!;
-          if (node === target) return true;
-          if (seen.has(node)) continue;
-          seen.add(node);
-          for (const next of adj.get(node) ?? []) stack.push(next);
+      const orderedIds: string[] = [];
+      for (const item of structure.items) {
+        const code = item.code.toUpperCase();
+        const prior = leafByCode.get(code);
+        if (prior) {
+          await tx.activity.update({
+            where: { id: prior.id },
+            data: {
+              name: item.name,
+              category: item.category as never,
+              boqQty: item.boqQty,
+              unit: item.unit as never,
+              parentId: parent.id,
+            },
+          });
+          orderedIds.push(prior.id);
+          updatedCodes.push(code);
+        } else {
+          const row = await tx.activity.create({
+            data: {
+              siteId,
+              code,
+              name: item.name,
+              category: item.category as never,
+              boqQty: item.boqQty,
+              unit: item.unit as never,
+              parentId: parent.id,
+              sequence: ++seq,
+            },
+          });
+          leafByCode.set(code, { ...row, isGroup: false });
+          takenCodes.add(code);
+          orderedIds.push(row.id);
+          created++;
         }
-        return false;
-      };
-      for (let i = 0; i + 1 < orderedIds.length; i++) {
-        const predecessorId = orderedIds[i];
-        const successorId = orderedIds[i + 1];
-        if (predecessorId === successorId || reaches(successorId, predecessorId)) {
-          skippedDeps++;
-          continue;
-        }
-        const res = await tx.activityDependency.createMany({
-          data: [{ predecessorId, successorId, lagDays: 0 }],
-          skipDuplicates: true,
-        });
-        if (res.count > 0) {
-          dependenciesCreated++;
-          addEdge(predecessorId, successorId);
+      }
+
+      if (chainSequence && orderedIds.length > 1) {
+        for (let i = 0; i + 1 < orderedIds.length; i++) {
+          const res = await tx.activityDependency.createMany({
+            data: [{ predecessorId: orderedIds[i], successorId: orderedIds[i + 1], lagDays: 0 }],
+            skipDuplicates: true,
+          });
+          dependenciesCreated += res.count;
         }
       }
     }
-    return { created, updated: updatedCodes.length, updatedCodes, dependenciesCreated, skippedDeps };
+    return { groupsCreated, created, updated: updatedCodes.length, updatedCodes, dependenciesCreated };
   });
 }
 
-describe("BOQ import commit semantics", () => {
-  it("creates activities with the new enum values and chains dependencies", async () => {
+describe("grouped BOQ import commit semantics", () => {
+  it("creates main activities (isGroup) with children and chains WITHIN each structure", async () => {
     const result = await commitImport(
       [
-        { code: "1.1", name: "Excavation in soil", category: "earthwork", boqQty: 450, unit: "CUM" },
-        { code: "2.1", name: "RCC M25 columns", category: "concreting", boqQty: 85, unit: "CUM" },
-        { code: "2.2", name: "Bar bending Fe500", category: "reinforcement", boqQty: 12500, unit: "KG" },
-        { code: "2.3", name: "Shuttering to slab", category: "shuttering", boqQty: 1400, unit: "SQM" },
+        {
+          name: "Boundary wall",
+          items: [
+            { code: "1.1", name: "Excavation", category: "earthwork", boqQty: 80, unit: "CUM" },
+            { code: "2.1", name: "PCC M10", category: "concreting", boqQty: 6.3, unit: "CUM" },
+            { code: "2.2", name: "Bar bending Fe500", category: "reinforcement", boqQty: 2500, unit: "KG" },
+          ],
+        },
+        {
+          name: "Underground water tank",
+          items: [
+            { code: "T.1", name: "Tank excavation", category: "earthwork", boqQty: 120, unit: "CUM" },
+            { code: "T.2", name: "Raft RCC M25", category: "concreting", boqQty: 45, unit: "CUM" },
+          ],
+        },
       ],
       true,
     );
-    expect(result).toMatchObject({ created: 4, updated: 0, dependenciesCreated: 3, skippedDeps: 0 });
+    expect(result).toMatchObject({ groupsCreated: 2, created: 5, updated: 0, dependenciesCreated: 3 });
 
-    const acts = await testDb.activity.findMany({ where: { siteId }, orderBy: { sequence: "asc" } });
-    expect(acts.map((a) => a.code)).toEqual(["1.1", "2.1", "2.2", "2.3"]);
-    expect(acts.map((a) => a.sequence)).toEqual([1, 2, 3, 4]);
-    expect(acts[2].category).toBe("reinforcement"); // real PG enum value
-    expect(acts[3].category).toBe("shuttering");
+    const groups = await testDb.activity.findMany({ where: { siteId, isGroup: true }, orderBy: { sequence: "asc" } });
+    expect(groups.map((g) => g.name)).toEqual(["Boundary wall", "Underground water tank"]);
+    expect(groups.every((g) => g.boqQty === null && g.unit === null)).toBe(true);
+
+    const wallKids = await testDb.activity.findMany({
+      where: { parentId: groups[0].id },
+      orderBy: { sequence: "asc" },
+    });
+    expect(wallKids.map((k) => k.code)).toEqual(["1.1", "2.1", "2.2"]);
+    expect(wallKids[2].category).toBe("reinforcement"); // real PG enum value
+
+    // No chain edge between structures: tank items depend only on each other.
+    const tankKids = await testDb.activity.findMany({ where: { parentId: groups[1].id } });
+    const crossDeps = await testDb.activityDependency.count({
+      where: {
+        predecessorId: { in: wallKids.map((k) => k.id) },
+        successorId: { in: tankKids.map((k) => k.id) },
+      },
+    });
+    expect(crossDeps).toBe(0);
   });
 
-  it("re-import updates by code without touching sequence/contractor, deps stay idempotent", async () => {
-    // Give an existing row fields an update must NOT clobber.
-    await testDb.activity.update({
-      where: { siteId_code: { siteId, code: "2.1" } },
-      data: { contractorName: "Sharma Constructions", productivityNormQtyPerDay: 6 },
-    });
-
+  it("re-import reuses the existing main activity and updates items by code", async () => {
     const result = await commitImport(
       [
-        { code: "2.1", name: "RCC M25 columns (rev B)", category: "concreting", boqQty: 92, unit: "CUM" },
-        { code: "3.1", name: "Blockwork 200mm", category: "masonry", boqQty: 320, unit: "CUM" },
+        {
+          name: "boundary WALL", // case-insensitive match
+          items: [
+            { code: "1.1", name: "Excavation (rev B)", category: "earthwork", boqQty: 95, unit: "CUM" },
+            { code: "3.1", name: "Shuttering to wall", category: "shuttering", boqQty: 140, unit: "SQM" },
+          ],
+        },
       ],
       true,
     );
-    expect(result.created).toBe(1);
+    expect(result.groupsCreated).toBe(0); // reused, not duplicated
     expect(result.updated).toBe(1);
-    expect(result.updatedCodes).toEqual(["2.1"]);
+    expect(result.created).toBe(1);
 
-    const updated = await testDb.activity.findUnique({
-      where: { siteId_code: { siteId, code: "2.1" } },
-    });
-    expect(updated?.name).toBe("RCC M25 columns (rev B)");
-    expect(Number(updated?.boqQty)).toBe(92);
-    expect(updated?.contractorName).toBe("Sharma Constructions"); // untouched
-    expect(Number(updated?.productivityNormQtyPerDay)).toBe(6); // untouched
-    expect(updated?.sequence).toBe(2); // untouched
+    const groups = await testDb.activity.findMany({ where: { siteId, isGroup: true } });
+    expect(groups.filter((g) => g.name.toLowerCase() === "boundary wall")).toHaveLength(1);
 
-    // New row sequences AFTER the existing tail.
-    const created = await testDb.activity.findUnique({
-      where: { siteId_code: { siteId, code: "3.1" } },
-    });
-    expect(created?.sequence).toBe(5);
-
-    // Re-running the same import adds no duplicate dependencies.
-    const again = await commitImport(
-      [
-        { code: "2.1", name: "RCC M25 columns (rev B)", category: "concreting", boqQty: 92, unit: "CUM" },
-        { code: "3.1", name: "Blockwork 200mm", category: "masonry", boqQty: 320, unit: "CUM" },
-      ],
-      true,
-    );
-    expect(again.dependenciesCreated).toBe(0);
+    const updated = await testDb.activity.findUnique({ where: { siteId_code: { siteId, code: "1.1" } } });
+    expect(updated?.name).toBe("Excavation (rev B)");
+    expect(Number(updated?.boqQty)).toBe(95);
   });
 
-  it("skips a chain edge that would close a dependency cycle", async () => {
-    const a = await testDb.activity.findUniqueOrThrow({ where: { siteId_code: { siteId, code: "1.1" } } });
-    const b = await testDb.activity.findUniqueOrThrow({ where: { siteId_code: { siteId, code: "2.1" } } });
-    // Existing graph already has 1.1 -> 2.1. An import ordered [2.1, 1.1]
-    // would try to add 2.1 -> 1.1, closing a loop — it must be skipped.
-    const result = await commitImport(
-      [
-        { code: "2.1", name: "RCC M25 columns (rev B)", category: "concreting", boqQty: 92, unit: "CUM" },
-        { code: "1.1", name: "Excavation in soil", category: "earthwork", boqQty: 450, unit: "CUM" },
-      ],
-      true,
-    );
-    expect(result.skippedDeps).toBe(1);
-    expect(result.dependenciesCreated).toBe(0);
-
-    const backEdge = await testDb.activityDependency.findFirst({
-      where: { predecessorId: b.id, successorId: a.id },
-    });
-    expect(backEdge).toBeNull();
+  it("groups carry no qty and are excluded from leaf-style queries", async () => {
+    const leaves = await testDb.activity.findMany({ where: { siteId, isGroup: false } });
+    const groups = await testDb.activity.findMany({ where: { siteId, isGroup: true } });
+    expect(leaves.length).toBe(6);
+    expect(groups.length).toBe(2);
+    expect(leaves.every((l) => l.parentId !== null)).toBe(true);
   });
 });

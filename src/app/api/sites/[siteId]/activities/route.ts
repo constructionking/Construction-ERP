@@ -40,7 +40,25 @@ const createSchema = z.object({
 export const POST = withApi(async (req: NextRequest, params) => {
   const siteId = params.siteId;
   await guard("activity.manage", { siteId });
-  const { dependsOn, ...data } = createSchema.parse(await req.json());
+  const { dependsOn, ...data } = createSchema
+    .extend({ isGroup: z.boolean().default(false) })
+    .parse(await req.json());
+
+  // Two-level WBS rules: a group (main activity) carries no qty/unit/norm/
+  // contractor and no dependencies; a leaf may sit under exactly one group.
+  const { ApiError } = await import("@/lib/auth/guard");
+  if (data.isGroup) {
+    if (data.boqQty !== undefined || data.unit !== undefined || data.productivityNormQtyPerDay !== undefined)
+      throw new ApiError(400, "A main activity is only a heading — it carries no quantity/unit/norm");
+    if (data.parentId) throw new ApiError(400, "Main activities cannot be nested");
+    if (dependsOn.length > 0) throw new ApiError(400, "Main activities cannot have dependencies");
+  }
+  if (data.parentId) {
+    const parent = await prisma.activity.findUnique({ where: { id: data.parentId } });
+    if (!parent || parent.siteId !== siteId || !parent.isGroup) {
+      throw new ApiError(400, "Parent must be a main activity of this site");
+    }
+  }
 
   const activity = await prisma.$transaction(async (tx) => {
     const created = await tx.activity.create({

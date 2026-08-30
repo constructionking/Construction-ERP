@@ -11,7 +11,11 @@ import { classifyRow } from "@/lib/boq-parser/classify";
 const FIXTURES = path.join(__dirname, "..", "fixtures", "boq");
 
 async function parse(file: string) {
-  return parseBoqWorkbook(fs.readFileSync(path.join(FIXTURES, file)));
+  return parseBoqWorkbook(fs.readFileSync(path.join(FIXTURES, file)), { fileName: file });
+}
+
+function structuresOf(rows: Array<{ structure: string }>): string[] {
+  return [...new Set(rows.map((r) => r.structure))];
 }
 
 function cat(r: BoqCandidateRow) {
@@ -64,6 +68,40 @@ describe("real BOQ: retaining wall (multi design-variant sheets)", () => {
     // 1.1.1 appears on every variant sheet — and TWICE on the Tie-Beam sheet.
     expect(first.length).toBe(5);
     expect(new Set(first.map((r) => r.sheetName)).size).toBe(4);
+  });
+});
+
+describe("structure (main activity) detection across all five real files", () => {
+  it("boundary wall: single structure from the workbook title row", async () => {
+    const res = await parse("boundary-wall.xlsx");
+    expect(structuresOf(res.rows)).toEqual(["Boundary Wall at Kanusi Site"]);
+  });
+
+  it("retaining wall: one structure per design-variant sheet, from sheet titles", async () => {
+    const res = await parse("retaining-wall.xlsx");
+    expect(structuresOf(res.rows)).toEqual([
+      "Boundary Wall RW as Arch Design 11.4 Mtr",
+      "Boundary Wall RW as Our Design 11.4 Mtr",
+      "Boundary Wall as Column & Tie Beam Design 11.4 Mtr",
+      "Deduction Amount Boundary Wall as RW Design 6.7 Mtr",
+    ]);
+  });
+
+  it("pipe laying: structures from top-level item numbers (1.0.0 headings)", async () => {
+    const res = await parse("pipe-laying.xlsx");
+    const structures = structuresOf(res.rows);
+    expect(structures).toContain("NP-2 Hume Pipe");
+    expect(structures).toContain("DWC SN-8 Pipe");
+    // "150 mm Dia" (1.1.0) stays a sub-section, never a structure.
+    expect(structures.some((s) => /mm dia/i.test(s))).toBe(false);
+  });
+
+  it("water supply: BLOCK banners become sibling structures; service-line banners stay sections", async () => {
+    const res = await parse("water-supply.xlsx");
+    expect(structuresOf(res.rows)).toEqual(["BLOCK - A", "BLOCK - B"]);
+    const b11 = res.rows.find((r) => r.itemNo === "B.1.1");
+    expect(b11?.structure).toBe("BLOCK - B");
+    expect(b11?.sectionPath.join(" ")).toContain("Fresh Water Main Lines");
   });
 });
 

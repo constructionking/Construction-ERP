@@ -11,6 +11,12 @@ export interface GanttRow {
   forecastEnd: string | null;
   slipPct: number | null;
   contractorName: string | null;
+  // Two-level WBS rendering: parents are MAIN activities (structures) whose
+  // bar is the derived span of their children; children indent under them.
+  level?: 0 | 1;
+  isParent?: boolean;
+  expanded?: boolean;
+  childCount?: number;
 }
 
 const ROW_H = 34;
@@ -48,11 +54,13 @@ export function GanttSvg({
   todayIso,
   monsoonMonths = [6, 7, 8, 9],
   width = 980,
+  onRowClick,
 }: {
   rows: GanttRow[];
   todayIso: string;
   monsoonMonths?: number[];
   width?: number;
+  onRowClick?: (code: string) => void; // parent expand/collapse (client wrapper)
 }) {
   if (rows.length === 0) return null;
 
@@ -154,26 +162,52 @@ export function GanttSvg({
         const delayColor =
           row.slipPct !== null && row.slipPct > 25 ? DELAY_CRITICAL : DELAY_WARN;
 
+        const indent = (row.level ?? 0) * 16;
         return (
-          <g key={row.code}>
+          <g
+            key={row.code}
+            onClick={row.isParent && onRowClick ? () => onRowClick(row.code) : undefined}
+            style={row.isParent && onRowClick ? { cursor: "pointer" } : undefined}
+          >
             <title>
               {`${row.code} ${row.name}\nPlanned ${row.plannedStart} → ${row.plannedEnd}\nProgress ${row.progressPct.toFixed(0)}%` +
                 (row.forecastEnd ? `\nForecast finish ${row.forecastEnd}` : "") +
-                (row.slipPct !== null && row.slipPct > 0 ? `\nSlip ${row.slipPct.toFixed(0)}%` : "")}
+                (row.slipPct !== null && row.slipPct > 0 ? `\nSlip ${row.slipPct.toFixed(0)}%` : "") +
+                (row.isParent ? `\n${row.childCount ?? 0} items — click to ${row.expanded ? "collapse" : "expand"}` : "")}
             </title>
-            {i % 2 === 1 ? (
+            {row.isParent ? (
+              <rect x={0} y={y} width={width} height={ROW_H} fill="#eef2f7" />
+            ) : i % 2 === 1 ? (
               <rect x={0} y={y} width={width} height={ROW_H} fill="#f8fafc" />
             ) : null}
-            <text x={8} y={y + ROW_H / 2 - 2} fontSize={12} fontWeight={600} fill={INK}>
-              {row.code}
+            <text
+              x={8 + indent}
+              y={y + ROW_H / 2 - 2}
+              fontSize={12}
+              fontWeight={row.isParent ? 700 : 600}
+              fill={INK}
+            >
+              {row.isParent ? `${row.expanded ? "▾" : "▸"} ` : ""}
+              {row.isParent ? row.name.slice(0, 30) : row.code}
             </text>
-            <text x={8} y={y + ROW_H / 2 + 11} fontSize={10} fill={INK_MUTED}>
-              {row.name.length > 34 ? row.name.slice(0, 33) + "…" : row.name}
-              {row.contractorName ? ` · ${row.contractorName}` : ""}
+            <text x={8 + indent} y={y + ROW_H / 2 + 11} fontSize={10} fill={INK_MUTED}>
+              {row.isParent
+                ? `${row.childCount ?? 0} items · ${row.progressPct.toFixed(0)}% done`
+                : (row.name.length > 34 ? row.name.slice(0, 33) + "…" : row.name) +
+                  (row.contractorName ? ` · ${row.contractorName}` : "")}
             </text>
 
-            {/* baseline bar */}
-            <rect x={x1} y={barY} width={barW} height={BAR_H} rx={4} fill={BASELINE_FILL} />
+            {/* baseline bar (parents: derived span of children, outlined) */}
+            <rect
+              x={x1}
+              y={row.isParent ? barY - 2 : barY}
+              width={barW}
+              height={row.isParent ? BAR_H + 4 : BAR_H}
+              rx={4}
+              fill={row.isParent ? "#aab8cc" : BASELINE_FILL}
+              stroke={row.isParent ? INK_MUTED : "none"}
+              strokeWidth={row.isParent ? 1 : 0}
+            />
             {/* actual progress fill */}
             {actualW > 0 ? (
               <rect

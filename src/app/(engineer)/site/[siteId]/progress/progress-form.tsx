@@ -9,6 +9,19 @@ interface ActivityOption {
   code: string;
   name: string;
   unit: string | null;
+  parent?: { name: string } | null; // main activity this item sits under
+}
+
+// Group options under their main activity for a scannable dropdown.
+function groupByParent(activities: ActivityOption[]) {
+  const groups = new Map<string, ActivityOption[]>();
+  for (const a of activities) {
+    const key = a.parent?.name ?? "";
+    const list = groups.get(key) ?? [];
+    list.push(a);
+    groups.set(key, list);
+  }
+  return [...groups.entries()];
 }
 
 async function uploadPhoto(
@@ -128,11 +141,23 @@ export function ProgressForm({
           required
         >
           <option value="">Select activity…</option>
-          {activities.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.code} — {a.name}
-            </option>
-          ))}
+          {groupByParent(activities).map(([groupName, items]) =>
+            groupName ? (
+              <optgroup key={groupName} label={groupName}>
+                {items.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.code} — {a.name}
+                  </option>
+                ))}
+              </optgroup>
+            ) : (
+              items.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.code} — {a.name}
+                </option>
+              ))
+            ),
+          )}
         </Select>
       </div>
 

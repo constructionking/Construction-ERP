@@ -3,7 +3,8 @@ import { requireSiteRolePage } from "@/lib/auth/page-guard";
 import { getCurrentBaseline } from "@/lib/schedule/service";
 import { businessDateIST, dateOnly } from "@/lib/versioning/day-close";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui";
-import { GanttSvg, type GanttRow } from "@/components/gantt/GanttSvg";
+import { type GanttRow } from "@/components/gantt/GanttSvg";
+import { GanttChart, type GanttGroup } from "@/components/gantt/GanttChart";
 import { ScheduleReview } from "./schedule-review";
 
 export default async function GanttPage({ params }: { params: Promise<{ siteId: string }> }) {
@@ -37,14 +38,17 @@ export default async function GanttPage({ params }: { params: Promise<{ siteId: 
   );
   const activityById = new Map(activities.map((a) => [a.id, a]));
 
-  const ganttRows: GanttRow[] = (baseline?.activities ?? [])
+  // Leaf rows from the locked baseline, then grouped under their MAIN
+  // activities; each parent's bar is DERIVED (span of children, BOQ-weighted
+  // progress, worst forecast) — parents are never baselined themselves.
+  const leafRows = (baseline?.activities ?? [])
     .map((baselineActivity) => {
       const activity = activityById.get(baselineActivity.activityId);
-      if (!activity) return null;
+      if (!activity || activity.isGroup) return null;
       const forecast = forecastByActivity.get(activity.id);
       const boq = Number(baselineActivity.plannedQty ?? activity.boqQty ?? 0);
       const done = doneByActivity.get(activity.id) ?? 0;
-      return {
+      const row: GanttRow = {
         code: activity.code,
         name: activity.name,
         plannedStart: dateOnly(baselineActivity.plannedStart),
@@ -54,9 +58,51 @@ export default async function GanttPage({ params }: { params: Promise<{ siteId: 
         slipPct: forecast?.slipPct !== null && forecast !== undefined ? Number(forecast.slipPct) : null,
         contractorName: activity.contractorName,
       };
+      return { row, parentId: activity.parentId, boq };
     })
-    .filter((row): row is GanttRow => row !== null)
-    .sort((a, b) => a.plannedStart.localeCompare(b.plannedStart));
+    .filter((r): r is { row: GanttRow; parentId: string | null; boq: number } => r !== null)
+    .sort((a, b) => a.row.plannedStart.localeCompare(b.row.plannedStart));
+
+  const ganttGroups: GanttGroup[] = [];
+  {
+    const parents = activities.filter((a) => a.isGroup);
+    for (const parent of parents) {
+      const children = leafRows.filter((l) => l.parentId === parent.id);
+      if (children.length === 0) continue;
+      const boqSum = children.reduce((s, c) => s + c.boq, 0);
+      const weighted = children.reduce(
+        (s, c) => s + c.row.progressPct * (boqSum > 0 ? c.boq / boqSum : 1 / children.length),
+        0,
+      );
+      const worst = children.reduce<GanttRow | null>(
+        (acc, c) => (c.row.slipPct !== null && (acc?.slipPct == null || c.row.slipPct > acc.slipPct) ? c.row : acc),
+        null,
+      );
+      ganttGroups.push({
+        parent: {
+          code: parent.code,
+          name: parent.name,
+          plannedStart: children.reduce((m, c) => (c.row.plannedStart < m ? c.row.plannedStart : m), children[0].row.plannedStart),
+          plannedEnd: children.reduce((m, c) => (c.row.plannedEnd > m ? c.row.plannedEnd : m), children[0].row.plannedEnd),
+          progressPct: weighted,
+          forecastEnd: children.reduce<string | null>(
+            (m, c) => (c.row.forecastEnd && (!m || c.row.forecastEnd > m) ? c.row.forecastEnd : m),
+            null,
+          ),
+          slipPct: worst?.slipPct ?? null,
+          contractorName: null,
+        },
+        children: children.map((c) => c.row),
+      });
+    }
+    const ungrouped = leafRows.filter(
+      (l) => !l.parentId || !parents.some((p) => p.id === l.parentId),
+    );
+    if (ungrouped.length > 0) {
+      ganttGroups.push({ parent: null, children: ungrouped.map((c) => c.row) });
+    }
+  }
+  const ganttRowCount = leafRows.length;
 
   return (
     <div className="space-y-4">
@@ -69,8 +115,8 @@ export default async function GanttPage({ params }: { params: Promise<{ siteId: 
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {ganttRows.length > 0 ? (
-              <GanttSvg rows={ganttRows} todayIso={businessDateIST()} />
+            {ganttRowCount > 0 ? (
+              <GanttChart groups={ganttGroups} todayIso={businessDateIST()} />
             ) : (
               <p className="text-sm text-slate-500">Baseline has no activities.</p>
             )}
@@ -89,6 +135,8 @@ export default async function GanttPage({ params }: { params: Promise<{ siteId: 
           id: a.id,
           code: a.code,
           name: a.name,
+          isGroup: a.isGroup,
+          parentId: a.parentId,
           category: a.category,
           boqQty: a.boqQty?.toString() ?? null,
           unit: a.unit,

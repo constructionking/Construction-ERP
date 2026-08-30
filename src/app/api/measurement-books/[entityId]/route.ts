@@ -42,7 +42,7 @@ export const PUT = withApi(async (req: NextRequest, params) => {
 
   const site = await prisma.site.findUnique({
     where: { id: current.siteId },
-    include: { activities: { select: { code: true, unit: true } } },
+    include: { activities: { select: { code: true, unit: true, isGroup: true } } },
   });
   const buffer = Buffer.from(await file.arrayBuffer());
   const { isXlsxBytes } = await import("@/lib/uploads");

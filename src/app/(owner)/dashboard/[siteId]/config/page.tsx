@@ -36,6 +36,7 @@ export default async function ConfigPage({ params }: { params: Promise<{ siteId:
         parentId: a.parentId,
         category: a.category,
         boqQty: a.boqQty?.toString() ?? "",
+        boqRate: a.boqRate?.toString() ?? "",
         unit: a.unit ?? "",
         norm: a.productivityNormQtyPerDay?.toString() ?? "",
         sequence: a.sequence,

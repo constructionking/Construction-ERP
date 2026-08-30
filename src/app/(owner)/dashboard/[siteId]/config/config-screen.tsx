@@ -17,7 +17,16 @@ import {
   Th,
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import { formatINR } from "@/lib/format/inr";
 import { BoqImport } from "./boq-import";
+
+function rowAmount(qty: string, rate: string): number | null {
+  if (!qty || !rate) return null;
+  const q = Number(qty);
+  const r = Number(rate);
+  if (!Number.isFinite(q) || !Number.isFinite(r)) return null;
+  return q * r;
+}
 
 interface ActivityRow {
   id: string;
@@ -27,6 +36,7 @@ interface ActivityRow {
   parentId: string | null;
   category: string;
   boqQty: string;
+  boqRate: string;
   unit: string;
   norm: string;
   sequence: number;
@@ -143,6 +153,78 @@ function ActivitiesSection({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resetConfirm, setResetConfirm] = useState("");
+  // Inline edit of one published BOQ item (or a main-activity name).
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [edit, setEdit] = useState({
+    name: "",
+    category: "general",
+    boqQty: "",
+    boqRate: "",
+    unit: "",
+    parentId: "" as string,
+  });
+
+  function startEdit(a: ActivityRow) {
+    setEditingId(a.id);
+    setEdit({
+      name: a.name,
+      category: a.category,
+      boqQty: a.boqQty,
+      boqRate: a.boqRate,
+      unit: a.unit,
+      parentId: a.parentId ?? "",
+    });
+    setError(null);
+  }
+
+  async function saveEdit(a: ActivityRow) {
+    setBusy(true);
+    setError(null);
+    try {
+      const body = a.isGroup
+        ? { name: edit.name }
+        : {
+            name: edit.name,
+            category: edit.category,
+            boqQty: edit.boqQty ? Number(edit.boqQty) : null,
+            boqRate: edit.boqRate ? Number(edit.boqRate) : null,
+            unit: edit.unit || undefined,
+            parentId: edit.parentId || null,
+          };
+      const res = await fetch(`/api/activities/${a.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "Could not save");
+        return;
+      }
+      setEditingId(null);
+      router.refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteRow(a: ActivityRow) {
+    const label = a.isGroup ? `main activity "${a.name}"` : `${a.code} — ${a.name}`;
+    if (!window.confirm(`Delete ${label}? This cannot be undone.`)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/activities/${a.id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "Could not delete");
+        return;
+      }
+      router.refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const groups = activities.filter((a) => a.isGroup);
   const leaves = activities.filter((a) => !a.isGroup);
@@ -237,16 +319,22 @@ function ActivitiesSection({
           <CardTitle>Activity list — BOQ quantities drive the schedule & audits</CardTitle>
         </CardHeader>
         <CardContent>
+          {error ? (
+            <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+          ) : null}
           <Table>
             <thead>
               <tr>
                 <Th>Code</Th>
                 <Th>Activity</Th>
                 <Th>Category</Th>
-                <Th className="text-right">BOQ</Th>
+                <Th className="text-right">BOQ qty</Th>
+                <Th className="text-right">Rate (₹)</Th>
+                <Th className="text-right">Amount</Th>
                 <Th className="text-right">Norm/day</Th>
                 <Th>Contractor</Th>
                 <Th>After</Th>
+                <Th />
               </tr>
             </thead>
             <tbody>
@@ -254,40 +342,209 @@ function ActivitiesSection({
               {[...groups, null].map((g) => {
                 const children = leaves.filter((a) => (g ? a.parentId === g.id : !a.parentId));
                 if (g === null && children.length === 0) return null;
+                const groupAmount = children.reduce(
+                  (sum, a) => sum + (rowAmount(a.boqQty, a.boqRate) ?? 0),
+                  0
+                );
                 return (
                   <React.Fragment key={g?.id ?? "__ungrouped"}>
                     {g ? (
-                      <tr className="bg-slate-100">
-                        <Td className="font-semibold text-slate-800">{g.code}</Td>
-                        <Td colSpan={5} className="font-semibold text-slate-800">
-                          {g.name}
-                        </Td>
-                        <Td className="text-xs text-slate-500">{children.length} items</Td>
-                      </tr>
+                      editingId === g.id ? (
+                        <tr className="bg-slate-100">
+                          <Td className="font-semibold text-slate-800">{g.code}</Td>
+                          <Td colSpan={9}>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Input
+                                value={edit.name}
+                                onChange={(e) => setEdit({ ...edit, name: e.target.value })}
+                                className="max-w-sm py-1.5"
+                              />
+                              <Button
+                                className="px-3 py-1.5 text-xs"
+                                disabled={busy || edit.name.trim().length < 2}
+                                onClick={() => saveEdit(g)}
+                              >
+                                Save
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                className="px-3 py-1.5 text-xs"
+                                onClick={() => setEditingId(null)}
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          </Td>
+                        </tr>
+                      ) : (
+                        <tr className="bg-slate-100">
+                          <Td className="font-semibold text-slate-800">{g.code}</Td>
+                          <Td colSpan={4} className="font-semibold text-slate-800">
+                            {g.name}
+                          </Td>
+                          <Td className="text-right font-semibold text-slate-800">
+                            {groupAmount > 0 ? formatINR(groupAmount) : "—"}
+                          </Td>
+                          <Td colSpan={3} className="text-xs text-slate-500">
+                            {children.length} items
+                          </Td>
+                          <Td className="whitespace-nowrap text-right">
+                            <button
+                              className="rounded px-1.5 py-0.5 text-xs font-medium text-brand-700 hover:bg-brand-50"
+                              onClick={() => startEdit(g)}
+                            >
+                              Rename
+                            </button>
+                            <button
+                              className="ml-1 rounded px-1.5 py-0.5 text-xs font-medium text-red-600 hover:bg-red-50"
+                              disabled={busy}
+                              onClick={() => deleteRow(g)}
+                            >
+                              Delete
+                            </button>
+                          </Td>
+                        </tr>
+                      )
                     ) : groups.length > 0 ? (
                       <tr className="bg-slate-50">
-                        <Td colSpan={7} className="text-xs font-medium text-slate-500">
+                        <Td colSpan={10} className="text-xs font-medium text-slate-500">
                           Not under any main activity
                         </Td>
                       </tr>
                     ) : null}
-                    {children.map((a) => (
-                      <tr key={a.id}>
-                        <Td className={cn("font-medium", g ? "pl-6" : undefined)}>{a.code}</Td>
-                        <Td>{a.name}</Td>
-                        <Td>
-                          <Badge tone="neutral">{a.category}</Badge>
-                        </Td>
-                        <Td className="text-right">
-                          {a.boqQty ? `${Number(a.boqQty).toLocaleString("en-IN")} ${a.unit}` : "—"}
-                        </Td>
-                        <Td className="text-right">{a.norm || "—"}</Td>
-                        <Td>{a.contractorName || <span className="text-slate-400">deptl</span>}</Td>
-                        <Td className="text-xs text-slate-400">
-                          {a.dependsOn.map((id) => activityById.get(id)?.code).filter(Boolean).join(", ") || "—"}
-                        </Td>
-                      </tr>
-                    ))}
+                    {children.map((a) =>
+                      editingId === a.id ? (
+                        <tr key={a.id} className="bg-amber-50/60">
+                          <Td className={cn("font-medium", g ? "pl-6" : undefined)}>{a.code}</Td>
+                          <Td>
+                            <Input
+                              value={edit.name}
+                              onChange={(e) => setEdit({ ...edit, name: e.target.value })}
+                              className="min-w-40 py-1.5"
+                            />
+                          </Td>
+                          <Td>
+                            <Select
+                              value={edit.category}
+                              onChange={(e) => setEdit({ ...edit, category: e.target.value })}
+                              className="py-1.5"
+                            >
+                              {CATEGORIES.map((c) => (
+                                <option key={c}>{c}</option>
+                              ))}
+                            </Select>
+                          </Td>
+                          <Td>
+                            <div className="flex justify-end gap-1">
+                              <Input
+                                type="number"
+                                step="0.001"
+                                min="0"
+                                value={edit.boqQty}
+                                onChange={(e) => setEdit({ ...edit, boqQty: e.target.value })}
+                                className="w-24 py-1.5 text-right"
+                              />
+                              <Select
+                                value={edit.unit}
+                                onChange={(e) => setEdit({ ...edit, unit: e.target.value })}
+                                className="w-20 py-1.5"
+                              >
+                                <option value="">unit</option>
+                                {UNITS.map((u) => (
+                                  <option key={u}>{u}</option>
+                                ))}
+                              </Select>
+                            </div>
+                          </Td>
+                          <Td>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={edit.boqRate}
+                              onChange={(e) => setEdit({ ...edit, boqRate: e.target.value })}
+                              className="w-24 py-1.5 text-right"
+                              placeholder="rate"
+                            />
+                          </Td>
+                          <Td className="text-right text-slate-500">
+                            {rowAmount(edit.boqQty, edit.boqRate) != null
+                              ? formatINR(rowAmount(edit.boqQty, edit.boqRate)!)
+                              : "—"}
+                          </Td>
+                          <Td className="text-right text-slate-400">{a.norm || "—"}</Td>
+                          <Td colSpan={2}>
+                            <Select
+                              value={edit.parentId}
+                              onChange={(e) => setEdit({ ...edit, parentId: e.target.value })}
+                              className="py-1.5"
+                            >
+                              <option value="">(no main activity)</option>
+                              {groups.map((gr) => (
+                                <option key={gr.id} value={gr.id}>
+                                  {gr.name}
+                                </option>
+                              ))}
+                            </Select>
+                          </Td>
+                          <Td className="whitespace-nowrap text-right">
+                            <Button
+                              className="px-3 py-1.5 text-xs"
+                              disabled={busy || edit.name.trim().length < 2}
+                              onClick={() => saveEdit(a)}
+                            >
+                              Save
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              className="ml-1 px-3 py-1.5 text-xs"
+                              onClick={() => setEditingId(null)}
+                            >
+                              Cancel
+                            </Button>
+                          </Td>
+                        </tr>
+                      ) : (
+                        <tr key={a.id}>
+                          <Td className={cn("font-medium", g ? "pl-6" : undefined)}>{a.code}</Td>
+                          <Td>{a.name}</Td>
+                          <Td>
+                            <Badge tone="neutral">{a.category}</Badge>
+                          </Td>
+                          <Td className="text-right">
+                            {a.boqQty ? `${Number(a.boqQty).toLocaleString("en-IN")} ${a.unit}` : "—"}
+                          </Td>
+                          <Td className="text-right">
+                            {a.boqRate ? Number(a.boqRate).toLocaleString("en-IN") : "—"}
+                          </Td>
+                          <Td className="text-right">
+                            {rowAmount(a.boqQty, a.boqRate) != null
+                              ? formatINR(rowAmount(a.boqQty, a.boqRate)!)
+                              : "—"}
+                          </Td>
+                          <Td className="text-right">{a.norm || "—"}</Td>
+                          <Td>{a.contractorName || <span className="text-slate-400">deptl</span>}</Td>
+                          <Td className="text-xs text-slate-400">
+                            {a.dependsOn.map((id) => activityById.get(id)?.code).filter(Boolean).join(", ") || "—"}
+                          </Td>
+                          <Td className="whitespace-nowrap text-right">
+                            <button
+                              className="rounded px-1.5 py-0.5 text-xs font-medium text-brand-700 hover:bg-brand-50"
+                              onClick={() => startEdit(a)}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              className="ml-1 rounded px-1.5 py-0.5 text-xs font-medium text-red-600 hover:bg-red-50"
+                              disabled={busy}
+                              onClick={() => deleteRow(a)}
+                            >
+                              Delete
+                            </button>
+                          </Td>
+                        </tr>
+                      )
+                    )}
                   </React.Fragment>
                 );
               })}

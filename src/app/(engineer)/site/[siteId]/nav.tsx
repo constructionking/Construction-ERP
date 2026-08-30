@@ -25,7 +25,8 @@ export function EngineerNav({ siteId }: { siteId: string }) {
               key={tab.href}
               href={href}
               className={cn(
-                "flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium",
+                // ≥48px tap targets — gloves + sunlight on site.
+                "flex min-h-[52px] flex-col items-center justify-center gap-0.5 py-2.5 text-[11px] font-medium",
                 active ? "text-brand-700" : "text-slate-400"
               )}
             >

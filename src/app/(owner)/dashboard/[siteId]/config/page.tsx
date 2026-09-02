@@ -7,7 +7,11 @@ export default async function ConfigPage({ params }: { params: Promise<{ siteId:
   const { siteId } = await params;
   await requireSiteRolePage(siteId, []);
 
-  const [activities, users, roles, materials, mixes, workTypes, policies] = await Promise.all([
+  const [site, activities, users, roles, materials, mixes, workTypes, policies] = await Promise.all([
+    prisma.site.findUnique({
+      where: { id: siteId },
+      select: { name: true, code: true, location: true, status: true, startDate: true },
+    }),
     prisma.activity.findMany({
       where: { siteId },
       orderBy: { sequence: "asc" },
@@ -28,12 +32,20 @@ export default async function ConfigPage({ params }: { params: Promise<{ siteId:
   return (
     <ConfigScreen
       siteId={siteId}
+      site={{
+        name: site?.name ?? "",
+        code: site?.code ?? "",
+        location: site?.location ?? "",
+        status: site?.status ?? "active",
+        startDate: site?.startDate ? site.startDate.toISOString().slice(0, 10) : "",
+      }}
       activities={activities.map((a) => ({
         id: a.id,
         code: a.code,
         name: a.name,
         isGroup: a.isGroup,
         parentId: a.parentId,
+        startDate: a.startDate ? a.startDate.toISOString().slice(0, 10) : "",
         category: a.category,
         boqQty: a.boqQty?.toString() ?? "",
         boqRate: a.boqRate?.toString() ?? "",

@@ -106,6 +106,40 @@ describe("schedule suggestion", () => {
     });
     expect(dates.every((d) => d.suggStart === "2026-02-01")).toBe(true);
   });
+
+  it("a main-activity anchor moves its items off the project start", () => {
+    const dates = suggestSchedule({
+      siteStartIso: "2026-02-01",
+      activities: [
+        act("ugt", { earliestStartIso: "2026-03-15" }),
+        act("wall"), // no anchor → project start
+      ],
+      dependencies: [],
+      config: NO_MONSOON,
+    });
+    expect(dates.find((d) => d.activityId === "ugt")!.suggStart).toBe("2026-03-15");
+    expect(dates.find((d) => d.activityId === "wall")!.suggStart).toBe("2026-02-01");
+  });
+
+  it("dependencies push past an anchor, never before it", () => {
+    const dates = suggestSchedule({
+      siteStartIso: "2026-01-01",
+      activities: [
+        act("fnd", { boqQty: 50, normPerDay: 10, sequence: 1 }), // ends Jan 5
+        // Anchored to Jan 2, but its predecessor only finishes Jan 5 → Jan 6.
+        act("col", { earliestStartIso: "2026-01-02", sequence: 2 }),
+        // Anchored AFTER the predecessor chain would allow → anchor wins.
+        act("plinth", { earliestStartIso: "2026-02-01", sequence: 3 }),
+      ],
+      dependencies: [
+        { predecessorId: "fnd", successorId: "col", lagDays: 0 },
+        { predecessorId: "fnd", successorId: "plinth", lagDays: 0 },
+      ],
+      config: NO_MONSOON,
+    });
+    expect(dates.find((d) => d.activityId === "col")!.suggStart).toBe("2026-01-06");
+    expect(dates.find((d) => d.activityId === "plinth")!.suggStart).toBe("2026-02-01");
+  });
 });
 
 describe("forecast", () => {

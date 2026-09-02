@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Label } from "@/components/ui";
+import { GanttEditor, type EditorRow } from "@/components/gantt/GanttEditor";
 
 function todayIST(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
@@ -39,20 +40,25 @@ export function ScheduleReview({
   suggestion,
   hasBaseline,
   siteStartDate,
+  groups,
 }: {
   siteId: string;
   activities: ActivityInfo[];
   suggestion: SuggestionData | null;
   hasBaseline: boolean;
   siteStartDate: string | null;
+  groups: Array<{ id: string; name: string; startDate: string | null }>;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [dates, setDates] = useState<Record<string, { start: string; end: string }>>({});
-  // Owner picks ONE date; the model computes everything forward from it.
+  // Project start = the default anchor; each main activity may carry its own.
   const [startDate, setStartDate] = useState(siteStartDate ?? todayIST());
+  const [groupStarts, setGroupStarts] = useState<Record<string, string>>(() =>
+    Object.fromEntries(groups.map((g) => [g.id, g.startDate ?? ""]))
+  );
 
   async function generate() {
     setBusy(true);
@@ -61,7 +67,13 @@ export function ScheduleReview({
       const res = await fetch(`/api/sites/${siteId}/schedule/suggest`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(startDate ? { startDate } : {}),
+        body: JSON.stringify({
+          ...(startDate ? { startDate } : {}),
+          groupStarts: groups.map((g) => ({
+            activityId: g.id,
+            startDate: groupStarts[g.id] || null,
+          })),
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -124,11 +136,12 @@ export function ScheduleReview({
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-sm text-slate-600">
-          Pick the project start date — the app models every activity&apos;s dates forward from
-          it (BOQ quantity ÷ daily productivity norm, walking the dependency chain and slowing
-          work through monsoon months, June–September). All dates come pre-filled; correct only
-          the ones you disagree with, then lock. After lock-in the dates are followed and cannot
-          be edited.
+          Set the project start date, and optionally a start date per main activity (UGT can
+          start on one day, the LT panel room on another). The app models every item&apos;s dates
+          forward from its own anchor (BOQ quantity ÷ daily productivity norm, walking the
+          dependency chain and slowing work through monsoon months, June–September). All dates
+          come pre-filled; drag bars on the chart or correct individual dates, then lock. After
+          lock-in the dates are followed and cannot be edited.
         </p>
         <div className="flex flex-wrap items-end gap-3">
           <div>
@@ -141,7 +154,7 @@ export function ScheduleReview({
             />
           </div>
           <Button variant="secondary" disabled={busy || !startDate} onClick={generate}>
-            {busy ? "Working…" : suggestion ? "Re-model from this date" : "Suggest schedule"}
+            {busy ? "Working…" : suggestion ? "Re-model from these dates" : "Suggest schedule"}
           </Button>
           {suggestion && !reviewing ? (
             <Button disabled={busy} onClick={startReview}>
@@ -149,12 +162,59 @@ export function ScheduleReview({
             </Button>
           ) : null}
         </div>
+        {groups.length > 0 ? (
+          <div className="rounded-lg border border-slate-200 p-3">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Main activity start dates (blank = project start)
+            </p>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {groups.map((g) => (
+                <div key={g.id} className="flex items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate text-sm text-slate-700" title={g.name}>
+                    {g.name}
+                  </span>
+                  <Input
+                    type="date"
+                    className="w-40 py-1.5"
+                    value={groupStarts[g.id] ?? ""}
+                    onChange={(e) =>
+                      setGroupStarts((s) => ({ ...s, [g.id]: e.target.value }))
+                    }
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
         {error ? (
           <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
         ) : null}
 
         {reviewing ? (
           <div className="space-y-2">
+            <div className="rounded-lg border border-slate-200 p-2">
+              <p className="mb-1 px-1 text-xs text-slate-500">
+                Drag a bar to move the whole activity · drag its edge to stretch or shorten it.
+                The dates in the table below follow along.
+              </p>
+              <GanttEditor
+                rows={activities
+                  .filter(
+                    (a) =>
+                      dates[a.id] ||
+                      (a.isGroup && activities.some((c) => c.parentId === a.id && dates[c.id]))
+                  )
+                  .map((a): EditorRow =>
+                    a.isGroup
+                      ? { kind: "heading", label: a.name }
+                      : { kind: "item", id: a.id, label: `${a.code} ${a.name}` }
+                  )}
+                dates={dates}
+                onChange={(id, start, end) =>
+                  setDates((d) => ({ ...d, [id]: { start, end } }))
+                }
+              />
+            </div>
             <div className="overflow-x-auto rounded-lg border border-slate-200">
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">

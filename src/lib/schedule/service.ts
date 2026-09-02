@@ -10,7 +10,11 @@ import { businessDateIST, dateOnly } from "@/lib/versioning/day-close";
 
 export async function runScheduleSuggestion(
   siteId: string,
-  config?: Partial<MonsoonConfig> & { startDate?: string }
+  config?: Partial<MonsoonConfig> & {
+    startDate?: string;
+    /** Per-main-activity start anchors; null clears one back to project start. */
+    groupStarts?: Array<{ activityId: string; startDate: string | null }>;
+  }
 ) {
   const site = await prisma.site.findUnique({
     where: { id: siteId },
@@ -34,6 +38,33 @@ export async function runScheduleSuggestion(
   const startIso =
     config?.startDate ?? (site.startDate ? dateOnly(site.startDate) : businessDateIST());
 
+  // Per-main-activity anchors: persist any the owner set, then read them all
+  // back so a leaf's chain starts from ITS structure's date, not the project's.
+  const groups = await prisma.activity.findMany({
+    where: { siteId, isGroup: true },
+    select: { id: true, startDate: true },
+  });
+  const groupIds = new Set(groups.map((g) => g.id));
+  if (config?.groupStarts?.length) {
+    for (const gs of config.groupStarts) {
+      if (!groupIds.has(gs.activityId)) {
+        throw new ApiError(400, "Start date given for something that is not a main activity of this site");
+      }
+      await prisma.activity.update({
+        where: { id: gs.activityId },
+        data: { startDate: gs.startDate ? new Date(gs.startDate) : null },
+      });
+    }
+  }
+  const anchorByGroup = new Map<string, string>();
+  for (const g of groups) {
+    const override = config?.groupStarts?.find((gs) => gs.activityId === g.id);
+    const iso = override !== undefined
+      ? override.startDate
+      : g.startDate ? dateOnly(g.startDate) : null;
+    if (iso) anchorByGroup.set(g.id, iso);
+  }
+
   const monsoonConfig: MonsoonConfig = {
     months: config?.months ?? DEFAULT_MONSOON_CONFIG.months,
     multipliers: { ...DEFAULT_MONSOON_CONFIG.multipliers, ...(config?.multipliers ?? {}) },
@@ -56,6 +87,7 @@ export async function runScheduleSuggestion(
       normPerDay:
         a.productivityNormQtyPerDay !== null ? Number(a.productivityNormQtyPerDay) : null,
       sequence: a.sequence,
+      earliestStartIso: a.parentId ? anchorByGroup.get(a.parentId) ?? null : null,
     })),
     dependencies,
     config: monsoonConfig,

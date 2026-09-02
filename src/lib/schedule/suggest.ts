@@ -10,6 +10,12 @@ export interface ScheduleActivityInput {
   boqQty: number | null;
   normPerDay: number | null;
   sequence: number;
+  /**
+   * Anchor: this activity starts no earlier than this day (its main
+   * activity's own start date). Dependencies can still push it later.
+   * Absent → the site's start date is the floor.
+   */
+  earliestStartIso?: string | null;
 }
 
 export interface DependencyInput {
@@ -142,7 +148,9 @@ export function suggestSchedule(input: {
 
   for (const id of order) {
     const activity = byId.get(id)!;
-    let start = input.siteStartIso;
+    // The main activity's own start date (when set) anchors its items;
+    // dependencies below can only push later, never earlier.
+    let start = activity.earliestStartIso ?? input.siteStartIso;
     for (const dep of predecessorsOf.get(id) ?? []) {
       const predEnd = endById.get(dep.predecessorId);
       if (!predEnd) continue;

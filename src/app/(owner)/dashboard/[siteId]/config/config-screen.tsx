@@ -34,6 +34,7 @@ interface ActivityRow {
   name: string;
   isGroup: boolean;
   parentId: string | null;
+  startDate: string; // main activities only: own schedule anchor
   category: string;
   boqQty: string;
   boqRate: string;
@@ -91,10 +92,25 @@ const WINDOW_LABELS: Record<string, string> = {
   never: "Never (owner only)",
 };
 
-const SECTIONS = ["Activities (WBS/BOQ)", "Team", "Materials & mixes", "Edit rights"] as const;
+const SECTIONS = [
+  "Site details",
+  "Activities (WBS/BOQ)",
+  "Team",
+  "Materials & mixes",
+  "Edit rights",
+] as const;
+
+interface SiteInfo {
+  name: string;
+  code: string;
+  location: string;
+  status: string;
+  startDate: string;
+}
 
 export function ConfigScreen(props: {
   siteId: string;
+  site: SiteInfo;
   activities: ActivityRow[];
   users: UserRow[];
   roles: { userId: string; role: string }[];
@@ -122,11 +138,116 @@ export function ConfigScreen(props: {
         ))}
       </div>
 
+      {section === "Site details" ? <SiteSection {...props} /> : null}
       {section === "Activities (WBS/BOQ)" ? <ActivitiesSection {...props} /> : null}
       {section === "Team" ? <TeamSection {...props} /> : null}
       {section === "Materials & mixes" ? <MaterialsSection {...props} /> : null}
       {section === "Edit rights" ? <PoliciesSection {...props} /> : null}
     </div>
+  );
+}
+
+// Everything the owner entered when the site was created — editable any time.
+function SiteSection({ siteId, site }: { siteId: string; site: SiteInfo }) {
+  const router = useRouter();
+  const [form, setForm] = useState({
+    name: site.name,
+    location: site.location,
+    status: site.status,
+    startDate: site.startDate,
+  });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/sites/${siteId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: form.name,
+          location: form.location || undefined,
+          status: form.status,
+          ...(form.startDate ? { startDate: form.startDate } : {}),
+        }),
+      });
+      const data = await res.json();
+      setMsg(
+        res.ok
+          ? { ok: true, text: "Site details saved" }
+          : { ok: false, text: data.error ?? "Could not save" }
+      );
+      if (res.ok) router.refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Site details</CardTitle>
+        <p className="mt-1 text-sm text-slate-500">
+          Everything entered when the site was set up — editable here at any time. The project
+          start date is the default anchor the schedule models from; each main activity can
+          carry its own start date in the Activities section or on the Gantt tab.
+        </p>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={save} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <Label>Site name</Label>
+            <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+          </div>
+          <div>
+            <Label>Site code (fixed)</Label>
+            <Input value={site.code} disabled />
+          </div>
+          <div>
+            <Label>Location</Label>
+            <Input
+              value={form.location}
+              onChange={(e) => setForm({ ...form, location: e.target.value })}
+              placeholder="e.g. Kanusi, Odisha"
+            />
+          </div>
+          <div>
+            <Label>Status</Label>
+            <Select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+              <option value="active">active</option>
+              <option value="on_hold">on hold</option>
+              <option value="completed">completed</option>
+            </Select>
+          </div>
+          <div>
+            <Label>Project start date</Label>
+            <Input
+              type="date"
+              value={form.startDate}
+              onChange={(e) => setForm({ ...form, startDate: e.target.value })}
+            />
+          </div>
+          <div className="sm:col-span-2">
+            {msg ? (
+              <p
+                className={cn(
+                  "mb-2 rounded-lg px-3 py-2 text-sm",
+                  msg.ok ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"
+                )}
+              >
+                {msg.text}
+              </p>
+            ) : null}
+            <Button type="submit" disabled={busy}>
+              {busy ? "Saving…" : "Save site details"}
+            </Button>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -162,6 +283,7 @@ function ActivitiesSection({
     boqRate: "",
     unit: "",
     parentId: "" as string,
+    startDate: "", // main activities: own schedule anchor
   });
 
   function startEdit(a: ActivityRow) {
@@ -173,6 +295,7 @@ function ActivitiesSection({
       boqRate: a.boqRate,
       unit: a.unit,
       parentId: a.parentId ?? "",
+      startDate: a.startDate,
     });
     setError(null);
   }
@@ -182,7 +305,7 @@ function ActivitiesSection({
     setError(null);
     try {
       const body = a.isGroup
-        ? { name: edit.name }
+        ? { name: edit.name, startDate: edit.startDate || null }
         : {
             name: edit.name,
             category: edit.category,
@@ -359,6 +482,14 @@ function ActivitiesSection({
                                 onChange={(e) => setEdit({ ...edit, name: e.target.value })}
                                 className="max-w-sm py-1.5"
                               />
+                              <span className="text-xs text-slate-500">starts</span>
+                              <Input
+                                type="date"
+                                value={edit.startDate}
+                                onChange={(e) => setEdit({ ...edit, startDate: e.target.value })}
+                                className="w-40 py-1.5"
+                                title="This main activity's own start date (blank = project start)"
+                              />
                               <Button
                                 className="px-3 py-1.5 text-xs"
                                 disabled={busy || edit.name.trim().length < 2}
@@ -387,13 +518,14 @@ function ActivitiesSection({
                           </Td>
                           <Td colSpan={3} className="text-xs text-slate-500">
                             {children.length} items
+                            {g.startDate ? ` · starts ${g.startDate}` : ""}
                           </Td>
                           <Td className="whitespace-nowrap text-right">
                             <button
                               className="rounded px-1.5 py-0.5 text-xs font-medium text-brand-700 hover:bg-brand-50"
                               onClick={() => startEdit(g)}
                             >
-                              Rename
+                              Edit
                             </button>
                             <button
                               className="ml-1 rounded px-1.5 py-0.5 text-xs font-medium text-red-600 hover:bg-red-50"

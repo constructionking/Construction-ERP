@@ -275,6 +275,9 @@ model Activity {
   contractorName            String?
   // Phase 2 (purchase dept) — reserved, unused in Phase 1:
   boqRate                   Decimal?         @db.Decimal(14, 2)
+  // MAIN ACTIVITIES ONLY: the structure's own start anchor — its items chain
+  // from this day. NULL = model from the site's project start date.
+  startDate                 DateTime?        @db.Date
 
   site   Site       @relation(fields: [siteId], references: [id])
   parent Activity?  @relation("wbs", fields: [parentId], references: [id])

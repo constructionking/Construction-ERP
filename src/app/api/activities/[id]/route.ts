@@ -16,6 +16,8 @@ const patchSchema = z.object({
   boqRate: z.number().positive().max(100_000_000).nullable().optional(),
   // Move the item under a different main activity (null = ungrouped).
   parentId: z.string().uuid().nullable().optional(),
+  // MAIN ACTIVITIES ONLY: the structure's own schedule anchor.
+  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
 });
 
 export const PATCH = withApi(async (req: NextRequest, params) => {
@@ -40,8 +42,17 @@ export const PATCH = withApi(async (req: NextRequest, params) => {
       throw new ApiError(400, "Parent must be a main activity of this site");
     }
   }
+  if (data.startDate !== undefined && !activity.isGroup) {
+    throw new ApiError(400, "A start date anchors a main activity; item dates come from the schedule");
+  }
 
-  const updated = await prisma.activity.update({ where: { id: params.id }, data });
+  const updated = await prisma.activity.update({
+    where: { id: params.id },
+    data: {
+      ...data,
+      startDate: data.startDate === undefined ? undefined : data.startDate ? new Date(data.startDate) : null,
+    },
+  });
   return NextResponse.json({ activity: updated });
 });
 

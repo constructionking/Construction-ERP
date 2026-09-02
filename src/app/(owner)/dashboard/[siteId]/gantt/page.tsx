@@ -133,6 +133,13 @@ export default async function GanttPage({ params }: { params: Promise<{ siteId: 
         siteId={siteId}
         hasBaseline={baseline !== null}
         siteStartDate={site?.startDate ? dateOnly(site.startDate) : null}
+        groups={activities
+          .filter((a) => a.isGroup)
+          .map((g) => ({
+            id: g.id,
+            name: g.name,
+            startDate: g.startDate ? dateOnly(g.startDate) : null,
+          }))}
         activities={activities.map((a) => ({
           id: a.id,
           code: a.code,

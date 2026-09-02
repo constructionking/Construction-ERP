@@ -161,6 +161,7 @@ export async function recomputeForecasts(siteId: string) {
   }
 
   let updated = 0;
+  const kept = new Set<string>();
   for (const baselineActivity of baseline.activities) {
     const activity = activityById.get(baselineActivity.activityId);
     if (!activity) continue;
@@ -188,6 +189,7 @@ export async function recomputeForecasts(siteId: string) {
         computedAt: new Date(),
       },
     });
+    kept.add(baselineActivity.activityId);
     updated += 1;
 
     const delay = evaluateContractorDelay({
@@ -216,6 +218,14 @@ export async function recomputeForecasts(siteId: string) {
     } else {
       await autoResolveFlag("contractor_delay", "activity", activity.id);
     }
+  }
+
+  // Purge forecasts that no longer apply — rows computed under a PREVIOUS
+  // baseline (activity dropped from the new one, or no longer forecastable)
+  // must not keep painting stale slip badges on a freshly locked plan.
+  const staleIds = activities.map((a) => a.id).filter((id) => !kept.has(id));
+  if (staleIds.length > 0) {
+    await prisma.activityForecast.deleteMany({ where: { activityId: { in: staleIds } } });
   }
   return { updated };
 }

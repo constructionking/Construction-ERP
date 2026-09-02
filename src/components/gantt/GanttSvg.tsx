@@ -109,7 +109,10 @@ export function GanttSvg({
       aria-label="Gantt chart: planned baseline versus actual progress per activity"
       style={{ fontFamily: "inherit" }}
     >
-      {/* monsoon bands + month grid */}
+      {/* monsoon bands + month grid. The first month usually starts BEFORE the
+          plot range; its tick/label would clamp onto the next month's — the
+          band is kept (clamped), the tick and label are skipped. Labels near
+          the right edge are skipped too so they never clip. */}
       {months.map((month, i) => (
         <g key={i}>
           {month.monsoon ? (
@@ -121,18 +124,22 @@ export function GanttSvg({
               fill={MONSOON_BAND}
             />
           ) : null}
-          <line
-            x1={x(month.startIso)}
-            x2={x(month.startIso)}
-            y1={HEADER_H - 6}
-            y2={HEADER_H + rows.length * ROW_H}
-            stroke={GRID}
-            strokeWidth={1}
-          />
-          <text x={x(month.startIso) + 4} y={HEADER_H - 12} fontSize={11} fill={INK_MUTED}>
-            {month.label}
-            {month.monsoon ? " ☔" : ""}
-          </text>
+          {month.startIso >= minIso ? (
+            <line
+              x1={x(month.startIso)}
+              x2={x(month.startIso)}
+              y1={HEADER_H - 6}
+              y2={HEADER_H + rows.length * ROW_H}
+              stroke={GRID}
+              strokeWidth={1}
+            />
+          ) : null}
+          {month.startIso >= minIso && x(month.startIso) + 4 < width - 52 ? (
+            <text x={x(month.startIso) + 4} y={HEADER_H - 12} fontSize={11} fill={INK_MUTED}>
+              {month.label}
+              {month.monsoon ? " ☔" : ""}
+            </text>
+          ) : null}
         </g>
       ))}
 
@@ -231,28 +238,29 @@ export function GanttSvg({
                 strokeDasharray="4 3"
               />
             ) : null}
-            {/* delay badge */}
+            {/* delay badge — clamped so it never clips off the right edge */}
             {delayed ? (
-              <g>
-                <rect
-                  x={x(row.forecastEnd ?? row.plannedEnd) + 4}
-                  y={barY - 2}
-                  width={44}
-                  height={16}
-                  rx={8}
-                  fill={delayColor}
-                />
-                <text
-                  x={x(row.forecastEnd ?? row.plannedEnd) + 26}
-                  y={barY + 10}
-                  fontSize={10}
-                  fontWeight={600}
-                  fill="#ffffff"
-                  textAnchor="middle"
-                >
-                  +{row.slipPct!.toFixed(0)}%
-                </text>
-              </g>
+              (() => {
+                const badgeX = Math.min(
+                  x(row.forecastEnd ?? row.plannedEnd) + 4,
+                  width - 16 - 44
+                );
+                return (
+                  <g>
+                    <rect x={badgeX} y={barY - 2} width={44} height={16} rx={8} fill={delayColor} />
+                    <text
+                      x={badgeX + 22}
+                      y={barY + 10}
+                      fontSize={10}
+                      fontWeight={600}
+                      fill="#ffffff"
+                      textAnchor="middle"
+                    >
+                      +{row.slipPct!.toFixed(0)}%
+                    </text>
+                  </g>
+                );
+              })()
             ) : null}
           </g>
         );

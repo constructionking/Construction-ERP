@@ -278,6 +278,10 @@ model Activity {
   // MAIN ACTIVITIES ONLY: the structure's own start anchor — its items chain
   // from this day. NULL = model from the site's project start date.
   startDate                 DateTime?        @db.Date
+  // Assigned contractor. contractorName stays the display/legacy string —
+  // it is SYNCED from the contractor on assignment so progress, labour and
+  // delay-flag consumers keep working unchanged.
+  contractorId              String?          @db.Uuid
 
   site   Site       @relation(fields: [siteId], references: [id])
   parent Activity?  @relation("wbs", fields: [parentId], references: [id])
@@ -528,6 +532,41 @@ model MixDesign {
   coefficients MixDesignCoefficient[]
 
   @@map("mix_designs")
+}
+
+// A contractor the owner negotiates rates with, per site. Rates live in
+// contractor_rates: tied to a work item (sub-activity of an assigned main
+// activity) or free-form (description + unit) for future works — rates
+// locked today for work not yet in the BOQ.
+model Contractor {
+  id     String  @id @default(uuid()) @db.Uuid
+  siteId String  @db.Uuid
+  name   String
+  phone  String?
+  active Boolean @default(true)
+
+  rates ContractorRate[]
+
+  @@unique([siteId, name])
+  @@map("contractors")
+}
+
+model ContractorRate {
+  id           String   @id @default(uuid()) @db.Uuid
+  contractorId String   @db.Uuid
+  // Either tied to a work item (activityId)…
+  activityId   String?  @db.Uuid
+  // …or a free-form rate locked for future work:
+  description  String?
+  unit         Unit?
+  rate         Decimal  @db.Decimal(14, 2)
+  note         String?
+  createdAt    DateTime @default(now())
+
+  contractor Contractor @relation(fields: [contractorId], references: [id])
+
+  @@unique([contractorId, activityId])
+  @@map("contractor_rates")
 }
 
 model MixDesignCoefficient {

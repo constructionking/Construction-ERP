@@ -28,6 +28,11 @@ export default async function ConfigPage({ params }: { params: Promise<{ siteId:
     prisma.workType.findMany({ orderBy: { name: "asc" } }),
     getAmendmentPolicies(),
   ]);
+  const contractors = await prisma.contractor.findMany({
+    where: { siteId },
+    include: { rates: { orderBy: { createdAt: "asc" } } },
+    orderBy: { name: "asc" },
+  });
 
   return (
     <ConfigScreen
@@ -45,6 +50,7 @@ export default async function ConfigPage({ params }: { params: Promise<{ siteId:
         name: a.name,
         isGroup: a.isGroup,
         parentId: a.parentId,
+        contractorId: a.contractorId,
         startDate: a.startDate ? a.startDate.toISOString().slice(0, 10) : "",
         category: a.category,
         boqQty: a.boqQty?.toString() ?? "",
@@ -78,6 +84,20 @@ export default async function ConfigPage({ params }: { params: Promise<{ siteId:
         })),
       }))}
       workTypes={workTypes.map((w) => ({ id: w.id, name: w.name, defaultUnit: w.defaultUnit }))}
+      contractors={contractors.map((c) => ({
+        id: c.id,
+        name: c.name,
+        phone: c.phone ?? "",
+        active: c.active,
+        rates: c.rates.map((r) => ({
+          id: r.id,
+          activityId: r.activityId,
+          description: r.description ?? "",
+          unit: r.unit ?? "",
+          rate: r.rate.toString(),
+          note: r.note ?? "",
+        })),
+      }))}
       policies={policies.map((p) => ({
         recordType: p.recordType,
         allowedWindow: p.allowedWindow,

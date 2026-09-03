@@ -34,6 +34,7 @@ interface ActivityRow {
   name: string;
   isGroup: boolean;
   parentId: string | null;
+  contractorId: string | null;
   startDate: string; // main activities only: own schedule anchor
   category: string;
   boqQty: string;
@@ -98,10 +99,27 @@ const WINDOW_LABELS: Record<string, string> = {
 const SECTIONS = [
   "Site details",
   "Activities (WBS/BOQ)",
+  "Contractors & rates",
   "Team",
   "Materials & mixes",
   "Edit rights",
 ] as const;
+
+interface ContractorRateRow {
+  id: string;
+  activityId: string | null;
+  description: string;
+  unit: string;
+  rate: string;
+  note: string;
+}
+interface ContractorRow {
+  id: string;
+  name: string;
+  phone: string;
+  active: boolean;
+  rates: ContractorRateRow[];
+}
 
 interface SiteInfo {
   name: string;
@@ -120,6 +138,7 @@ export function ConfigScreen(props: {
   materials: MaterialRow[];
   mixes: MixRow[];
   workTypes: { id: string; name: string; defaultUnit: string }[];
+  contractors: ContractorRow[];
   policies: PolicyRow[];
 }) {
   const [section, setSection] = useState<(typeof SECTIONS)[number]>(SECTIONS[0]);
@@ -143,6 +162,7 @@ export function ConfigScreen(props: {
 
       {section === "Site details" ? <SiteSection {...props} /> : null}
       {section === "Activities (WBS/BOQ)" ? <ActivitiesSection {...props} /> : null}
+      {section === "Contractors & rates" ? <ContractorsSection {...props} /> : null}
       {section === "Team" ? <TeamSection {...props} /> : null}
       {section === "Materials & mixes" ? <MaterialsSection {...props} /> : null}
       {section === "Edit rights" ? <PoliciesSection {...props} /> : null}
@@ -852,6 +872,401 @@ function ActivitiesSection({
           </CardContent>
         </Card>
       ) : null}
+    </div>
+  );
+}
+
+// Contractor-wise rate cards: rates are negotiated PER CONTRACTOR. Assign a
+// main activity to a contractor and fill the agreed rate for each item under
+// it; free-form rows hold rates locked today for future works not in the BOQ.
+function ContractorsSection({
+  siteId,
+  activities,
+  contractors,
+}: {
+  siteId: string;
+  activities: ActivityRow[];
+  contractors: ContractorRow[];
+}) {
+  const router = useRouter();
+  const groups = activities.filter((a) => a.isGroup);
+  const leaves = activities.filter((a) => !a.isGroup);
+  const [form, setForm] = useState({ name: "", phone: "" });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [assignSel, setAssignSel] = useState<Record<string, string>>({});
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  // Drafts keyed "contractorId:activityId" — input shows draft ?? saved rate.
+  const [rateDraft, setRateDraft] = useState<Record<string, string>>({});
+  const [futureDrafts, setFutureDrafts] = useState<
+    Record<string, { id?: string; description: string; unit: string; rate: string; note: string }[]>
+  >({});
+
+  async function post(url: string, method: string, body?: unknown): Promise<boolean> {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "Request failed");
+        return false;
+      }
+      router.refresh();
+      return true;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addContractor(e: React.FormEvent) {
+    e.preventDefault();
+    if (await post(`/api/sites/${siteId}/contractors`, "POST", {
+      name: form.name,
+      phone: form.phone || undefined,
+    })) {
+      setForm({ name: "", phone: "" });
+    }
+  }
+
+  async function assign(contractorId: string) {
+    const groupId = assignSel[contractorId];
+    if (!groupId) return;
+    if (await post(`/api/sites/${siteId}/activities/assign-contractor`, "POST", {
+      groupId,
+      contractorId,
+    })) {
+      // On assigning, open rate entry for the items straight away.
+      setOpenGroups((s) => ({ ...s, [`${contractorId}:${groupId}`]: true }));
+      setAssignSel((s) => ({ ...s, [contractorId]: "" }));
+    }
+  }
+
+  async function unassign(contractorId: string, groupId: string) {
+    if (!window.confirm("Unassign this main activity from the contractor? Saved rates are kept.")) return;
+    await post(`/api/sites/${siteId}/activities/assign-contractor`, "POST", {
+      groupId,
+      contractorId: null,
+    });
+  }
+
+  async function saveGroupRates(contractor: ContractorRow, groupId: string) {
+    const items = leaves.filter((a) => a.parentId === groupId);
+    const savedByActivity = new Map(
+      contractor.rates.filter((r) => r.activityId).map((r) => [r.activityId!, r.rate])
+    );
+    const itemRates = items
+      .map((a) => {
+        const key = `${contractor.id}:${a.id}`;
+        const draft = rateDraft[key];
+        if (draft === undefined) return null; // untouched
+        const saved = savedByActivity.get(a.id);
+        if (draft === "" && saved === undefined) return null;
+        return { activityId: a.id, rate: draft === "" ? null : Number(draft) };
+      })
+      .filter((r): r is { activityId: string; rate: number | null } => r !== null && (r.rate === null || Number.isFinite(r.rate)));
+    if (itemRates.length === 0) return;
+    if (await post(`/api/contractors/${contractor.id}/rates`, "PUT", { itemRates })) {
+      setRateDraft((d) => {
+        const next = { ...d };
+        for (const item of items) delete next[`${contractor.id}:${item.id}`];
+        return next;
+      });
+    }
+  }
+
+  function futureOf(contractor: ContractorRow) {
+    return (
+      futureDrafts[contractor.id] ??
+      contractor.rates
+        .filter((r) => !r.activityId)
+        .map((r) => ({ id: r.id, description: r.description, unit: r.unit || "CUM", rate: r.rate, note: r.note }))
+    );
+  }
+
+  async function saveFuture(contractor: ContractorRow) {
+    const rows = futureOf(contractor).filter((r) => r.description.trim() && Number(r.rate) > 0);
+    if (await post(`/api/contractors/${contractor.id}/rates`, "PUT", {
+      futureRates: rows.map((r) => ({
+        id: r.id,
+        description: r.description.trim(),
+        unit: r.unit,
+        rate: Number(r.rate),
+        note: r.note || null,
+      })),
+    })) {
+      setFutureDrafts((d) => {
+        const next = { ...d };
+        delete next[contractor.id];
+        return next;
+      });
+    }
+  }
+
+  async function deleteContractor(contractor: ContractorRow) {
+    if (!window.confirm(`Delete contractor "${contractor.name}" and their rate card?`)) return;
+    await post(`/api/contractors/${contractor.id}`, "DELETE");
+  }
+
+  return (
+    <div className="space-y-4">
+      {error ? (
+        <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+      ) : null}
+
+      {contractors.map((contractor) => {
+        const assignedGroups = groups.filter((g) => g.contractorId === contractor.id);
+        const savedByActivity = new Map(
+          contractor.rates.filter((r) => r.activityId).map((r) => [r.activityId!, r.rate])
+        );
+        const future = futureOf(contractor);
+        return (
+          <Card key={contractor.id}>
+            <CardHeader>
+              <div className="flex flex-wrap items-center gap-2">
+                <CardTitle>{contractor.name}</CardTitle>
+                {contractor.phone ? (
+                  <span className="text-xs text-slate-500">{contractor.phone}</span>
+                ) : null}
+                <Badge tone="blue">{assignedGroups.length} main activities</Badge>
+                <button
+                  className="ml-auto rounded px-1.5 py-0.5 text-xs font-medium text-red-600 hover:bg-red-50"
+                  disabled={busy}
+                  onClick={() => deleteContractor(contractor)}
+                >
+                  Delete
+                </button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {/* Assign a main activity → opens rate entry for its items */}
+              <div className="flex flex-wrap items-center gap-2">
+                <Select
+                  value={assignSel[contractor.id] ?? ""}
+                  onChange={(e) => setAssignSel((s) => ({ ...s, [contractor.id]: e.target.value }))}
+                  className="w-72 py-1.5"
+                >
+                  <option value="">Assign a main activity…</option>
+                  {groups
+                    .filter((g) => g.contractorId !== contractor.id)
+                    .map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.name}
+                        {g.contractorId ? " (currently with another contractor)" : ""}
+                      </option>
+                    ))}
+                </Select>
+                <Button
+                  variant="secondary"
+                  className="px-3 py-1.5 text-xs"
+                  disabled={busy || !assignSel[contractor.id]}
+                  onClick={() => assign(contractor.id)}
+                >
+                  Assign & fill rates
+                </Button>
+              </div>
+
+              {assignedGroups.map((g) => {
+                const key = `${contractor.id}:${g.id}`;
+                const items = leaves.filter((a) => a.parentId === g.id);
+                const open = openGroups[key] ?? false;
+                return (
+                  <div key={g.id} className="rounded-lg border border-slate-200">
+                    <div className="flex flex-wrap items-center gap-2 px-3 py-2">
+                      <button
+                        className="text-sm font-medium text-slate-800"
+                        onClick={() => setOpenGroups((s) => ({ ...s, [key]: !open }))}
+                      >
+                        {open ? "▾" : "▸"} {g.name}
+                      </button>
+                      <span className="text-xs text-slate-400">
+                        {items.filter((a) => savedByActivity.has(a.id)).length}/{items.length} rates agreed
+                      </span>
+                      <button
+                        className="ml-auto rounded px-1.5 py-0.5 text-xs text-slate-500 hover:bg-slate-100"
+                        disabled={busy}
+                        onClick={() => unassign(contractor.id, g.id)}
+                      >
+                        Unassign
+                      </button>
+                    </div>
+                    {open ? (
+                      <div className="space-y-1.5 border-t border-slate-100 px-3 py-2">
+                        {items.length === 0 ? (
+                          <p className="text-xs text-slate-500">No items under this main activity yet.</p>
+                        ) : (
+                          items.map((a) => {
+                            const rateKey = `${contractor.id}:${a.id}`;
+                            const value = rateDraft[rateKey] ?? savedByActivity.get(a.id) ?? "";
+                            return (
+                              <div key={a.id} className="flex flex-wrap items-center gap-2 text-sm">
+                                <span className="w-24 shrink-0 font-medium text-slate-700">{a.code}</span>
+                                <span className="min-w-0 flex-1 truncate text-slate-600" title={a.name}>
+                                  {a.name}
+                                </span>
+                                <span className="text-xs text-slate-400">₹/{a.unit || "unit"}</span>
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  value={value}
+                                  onChange={(e) =>
+                                    setRateDraft((d) => ({ ...d, [rateKey]: e.target.value }))
+                                  }
+                                  className="w-32 py-1.5 text-right"
+                                  placeholder="agreed rate"
+                                />
+                              </div>
+                            );
+                          })
+                        )}
+                        <Button
+                          className="mt-1 px-3 py-1.5 text-xs"
+                          disabled={busy}
+                          onClick={() => saveGroupRates(contractor, g.id)}
+                        >
+                          Save rates for {g.name}
+                        </Button>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+
+              {/* Rates locked for future works (not in the BOQ) */}
+              <div className="rounded-lg border border-dashed border-slate-300 px-3 py-2">
+                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Rates locked for future work (not in the activities list yet)
+                </p>
+                {future.map((r, i) => (
+                  <div key={r.id ?? `new-${i}`} className="mb-1.5 flex flex-wrap items-center gap-2">
+                    <Input
+                      value={r.description}
+                      onChange={(e) =>
+                        setFutureDrafts((d) => ({
+                          ...d,
+                          [contractor.id]: futureOf(contractor).map((row, j) =>
+                            j === i ? { ...row, description: e.target.value } : row
+                          ),
+                        }))
+                      }
+                      placeholder="e.g. Internal plaster 12 mm"
+                      className="min-w-52 flex-1 py-1.5"
+                    />
+                    <Select
+                      value={r.unit}
+                      onChange={(e) =>
+                        setFutureDrafts((d) => ({
+                          ...d,
+                          [contractor.id]: futureOf(contractor).map((row, j) =>
+                            j === i ? { ...row, unit: e.target.value } : row
+                          ),
+                        }))
+                      }
+                      className="w-24 py-1.5"
+                    >
+                      {UNITS.map((u) => (
+                        <option key={u}>{u}</option>
+                      ))}
+                    </Select>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={r.rate}
+                      onChange={(e) =>
+                        setFutureDrafts((d) => ({
+                          ...d,
+                          [contractor.id]: futureOf(contractor).map((row, j) =>
+                            j === i ? { ...row, rate: e.target.value } : row
+                          ),
+                        }))
+                      }
+                      placeholder="₹ rate"
+                      className="w-28 py-1.5 text-right"
+                    />
+                    <button
+                      type="button"
+                      className="text-xs text-red-600"
+                      onClick={() =>
+                        setFutureDrafts((d) => ({
+                          ...d,
+                          [contractor.id]: futureOf(contractor).filter((_, j) => j !== i),
+                        }))
+                      }
+                    >
+                      remove
+                    </button>
+                  </div>
+                ))}
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="text-xs font-medium text-brand-700"
+                    onClick={() =>
+                      setFutureDrafts((d) => ({
+                        ...d,
+                        [contractor.id]: [
+                          ...futureOf(contractor),
+                          { description: "", unit: "CUM", rate: "", note: "" },
+                        ],
+                      }))
+                    }
+                  >
+                    + add future-work rate
+                  </button>
+                  {futureDrafts[contractor.id] ? (
+                    <Button
+                      className="px-3 py-1.5 text-xs"
+                      disabled={busy}
+                      onClick={() => saveFuture(contractor)}
+                    >
+                      Save future-work rates
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Add contractor</CardTitle>
+          <p className="mt-1 text-sm text-slate-500">
+            Each contractor gets their own rate card. Assign a main activity to them and the
+            item-wise rate entry opens; future-work rates can be locked before the items exist.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={addContractor} className="flex flex-wrap items-end gap-3">
+            <div className="min-w-56 flex-1">
+              <Label>Contractor name</Label>
+              <Input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="e.g. Sharma Constructions"
+                required
+              />
+            </div>
+            <div>
+              <Label>Phone (optional)</Label>
+              <Input
+                value={form.phone}
+                onChange={(e) => setForm({ ...form, phone: e.target.value })}
+              />
+            </div>
+            <Button type="submit" disabled={busy || !form.name.trim()}>
+              {busy ? "Adding…" : "Add contractor"}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
     </div>
   );
 }

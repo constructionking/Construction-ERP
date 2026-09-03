@@ -508,11 +508,22 @@ model Material {
   @@map("materials")
 }
 
+// Confirmation state of a mix's coefficients (accountant's audit language):
+// locked → variance flags raise; provisional → flags marked "(prov.)";
+// tbd → consumption reported but never flagged until the rate is fixed.
+enum MixStatus {
+  locked
+  provisional
+  tbd
+}
+
 model MixDesign {
-  id         String @id @default(uuid()) @db.Uuid
-  code       String @unique
+  id         String    @id @default(uuid()) @db.Uuid
+  code       String    @unique
   name       String
-  outputUnit Unit   @default(CUM)
+  outputUnit Unit      @default(CUM)
+  status     MixStatus @default(locked)
+  note       String?
 
   coefficients MixDesignCoefficient[]
 

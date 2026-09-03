@@ -122,6 +122,19 @@ export async function runConsumptionAudit(scope: {
   ]);
   if (!mix) return null;
 
+  // TBD mix (rate not fixed, e.g. per-joint haunching): consumption is
+  // reported but NEVER flagged — an unverifiable rate must not accuse anyone.
+  if (mix.status === "tbd") {
+    for (const coefficient of mix.coefficients) {
+      await autoResolveFlag(
+        "consumption_variance",
+        "activity_material",
+        `${scope.activityId}:${coefficient.materialId}`
+      );
+    }
+    return null;
+  }
+
   const findings = evaluateConsumptionVariance({
     progressQty: Number(progress._sum.qtyDone ?? 0),
     coefficients: mix.coefficients.map((c) => ({
@@ -161,8 +174,10 @@ export async function runConsumptionAudit(scope: {
         actual: Number(finding.actual.toFixed(3)),
         variancePct: Number(finding.variancePct.toFixed(1)),
         unit: material?.unit,
+        mixStatus: mix.status,
       },
-      title: `Consumption ${finding.variancePct.toFixed(0)}% over mix design`,
+      // Provisional rate → say so, the way the accountant writes "HIGH (prov.)".
+      title: `Consumption ${finding.variancePct.toFixed(0)}% over mix design${mix.status === "provisional" ? " (provisional rate)" : ""}`,
       body: `${material?.name ?? "Material"} on ${activity?.code ?? "activity"}: actual ${finding.actual.toFixed(1)} vs theoretical ${finding.theoretical.toFixed(1)} (${mix.code})`,
     });
   }

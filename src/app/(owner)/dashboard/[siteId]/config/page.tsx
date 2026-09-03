@@ -69,6 +69,9 @@ export default async function ConfigPage({ params }: { params: Promise<{ siteId:
         id: m.id,
         code: m.code,
         name: m.name,
+        outputUnit: m.outputUnit,
+        status: m.status,
+        note: m.note ?? "",
         coefficients: m.coefficients.map((c) => ({
           materialId: c.materialId,
           qtyPerUnit: c.qtyPerUnit.toString(),

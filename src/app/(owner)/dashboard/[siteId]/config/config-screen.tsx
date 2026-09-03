@@ -62,6 +62,9 @@ interface MixRow {
   id: string;
   code: string;
   name: string;
+  outputUnit: string;
+  status: string; // locked | provisional | tbd
+  note: string;
   coefficients: { materialId: string; qtyPerUnit: string }[];
 }
 interface PolicyRow {
@@ -1035,6 +1038,73 @@ function TeamSection({
   );
 }
 
+// Mix vocabulary + suggested cement coefficients, modeled on the owner's
+// accountant's cement audit ("Locked mixes: PCC 1:4:8 → 3.37 bags/m³, brick
+// mortar 1:6 → 1.25 bags/m³ PROVISIONAL, haunch 1:3:6 per-joint TBD").
+// Every number is a common Indian thumb rule offered as a FILL — the owner
+// confirms or edits before locking.
+const MIX_TYPES: Record<
+  string,
+  {
+    basis: string;
+    ratios: Record<string, number | null>; // suggested cement bags per basis
+    defaultStatus: string;
+    note: string;
+  }
+> = {
+  PCC: {
+    basis: "CUM",
+    ratios: { "1:5:10": 2.6, "1:4:8": 3.4, "1:3:6": 4.4, "1:2:4": 6.3 },
+    defaultStatus: "locked",
+    note: "",
+  },
+  RCC: {
+    basis: "CUM",
+    ratios: { "M15": 6.3, "M20": 8.0, "M25": 8.5, "M30": 9.0 },
+    defaultStatus: "locked",
+    note: "",
+  },
+  "Brick mortar": {
+    basis: "CUM",
+    ratios: { "1:3": 2.33, "1:4": 1.74, "1:6": 1.25 },
+    defaultStatus: "provisional",
+    note: "Provisional until brick size is confirmed",
+  },
+  Plaster: {
+    basis: "SQM",
+    ratios: { "1:3 (12 mm)": 0.13, "1:4 (12 mm)": 0.1, "1:6 (12 mm)": 0.07 },
+    defaultStatus: "provisional",
+    note: "Confirm thickness & ratio before locking",
+  },
+  "Joint haunching": {
+    basis: "NOS",
+    ratios: { "1:3:6": null },
+    defaultStatus: "tbd",
+    note: "Per-joint volume not fixed — consumption reported, not flagged",
+  },
+  Other: { basis: "CUM", ratios: {}, defaultStatus: "provisional", note: "" },
+};
+
+const BASIS_LABELS: Record<string, string> = {
+  CUM: "per m³ (CUM)",
+  SQM: "per m² (SQM)",
+  MTR: "per running metre (MTR)",
+  NOS: "per joint / number (NOS)",
+  BAG: "per bag",
+  KG: "per kg",
+  TON: "per tonne",
+};
+
+const MIX_STATUS_META: Record<string, { label: string; tone: "green" | "amber" | "red" }> = {
+  locked: { label: "Locked — audited", tone: "green" },
+  provisional: { label: "Provisional — flags say (prov.)", tone: "amber" },
+  tbd: { label: "TBD — reported, not flagged", tone: "red" },
+};
+
+function slugCode(name: string): string {
+  return name.toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 20);
+}
+
 function MaterialsSection({
   materials,
   mixes,
@@ -1057,6 +1127,139 @@ function MaterialsSection({
   const [error, setError] = useState<string | null>(null);
 
   const materialById = new Map(materials.map((m) => [m.id, m]));
+  const cementDefault =
+    materials.find((m) => m.category === "cement")?.id ?? materials[0]?.id ?? "";
+
+  // --- Add mix design ---
+  const [mixForm, setMixForm] = useState(() => ({
+    type: "PCC",
+    ratio: "1:4:8",
+    name: "PCC 1:4:8",
+    code: "PCC-1-4-8",
+    basis: "CUM",
+    status: "locked",
+    note: "",
+    rows: [{ materialId: cementDefault, qty: "3.4" }],
+  }));
+  const [mixError, setMixError] = useState<string | null>(null);
+  // --- Edit an existing mix ---
+  const [mixEditId, setMixEditId] = useState<string | null>(null);
+  const [mixEdit, setMixEdit] = useState<{
+    status: string;
+    note: string;
+    rows: { materialId: string; qty: string }[];
+  }>({ status: "locked", note: "", rows: [] });
+
+  function applyPreset(type: string, ratio: string) {
+    const meta = MIX_TYPES[type] ?? MIX_TYPES.Other;
+    const suggested = meta.ratios[ratio];
+    const name = type === "Other" ? "" : type === "RCC" ? `RCC ${ratio}` : `${type} ${ratio}`;
+    setMixForm((f) => ({
+      ...f,
+      type,
+      ratio,
+      name,
+      code: slugCode(name),
+      basis: meta.basis,
+      status: meta.defaultStatus,
+      note: meta.note,
+      rows: [
+        { materialId: f.rows[0]?.materialId || cementDefault, qty: suggested != null ? String(suggested) : "" },
+        ...f.rows.slice(1),
+      ],
+    }));
+  }
+
+  async function addMix(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setMixError(null);
+    try {
+      const coefficients = mixForm.rows
+        .filter((r) => r.materialId && r.qty && Number(r.qty) > 0)
+        .map((r) => ({ materialId: r.materialId, qtyPerUnit: Number(r.qty) }));
+      if (coefficients.length === 0) {
+        setMixError("Enter at least one material rate (e.g. cement bags per m³)");
+        return;
+      }
+      const res = await fetch("/api/mix-designs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: mixForm.code || slugCode(mixForm.name),
+          name: mixForm.name,
+          outputUnit: mixForm.basis,
+          status: mixForm.status,
+          note: mixForm.note || null,
+          coefficients,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMixError(data.error ?? "Could not create the mix");
+        return;
+      }
+      setMixForm((f) => ({ ...f, name: "", code: "", rows: [{ materialId: cementDefault, qty: "" }] }));
+      router.refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function startMixEdit(mix: MixRow) {
+    setMixEditId(mix.id);
+    setMixEdit({
+      status: mix.status,
+      note: mix.note,
+      rows: mix.coefficients.map((c) => ({ materialId: c.materialId, qty: c.qtyPerUnit })),
+    });
+    setMixError(null);
+  }
+
+  async function saveMixEdit(mix: MixRow) {
+    setBusy(true);
+    setMixError(null);
+    try {
+      const coefficients = mixEdit.rows
+        .filter((r) => r.materialId && r.qty && Number(r.qty) > 0)
+        .map((r) => ({ materialId: r.materialId, qtyPerUnit: Number(r.qty) }));
+      const res = await fetch(`/api/mix-designs/${mix.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: mixEdit.status,
+          note: mixEdit.note || null,
+          ...(coefficients.length > 0 ? { coefficients } : {}),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMixError(data.error ?? "Could not save the mix");
+        return;
+      }
+      setMixEditId(null);
+      router.refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteMix(mix: MixRow) {
+    if (!window.confirm(`Delete mix ${mix.code} — ${mix.name}?`)) return;
+    setBusy(true);
+    setMixError(null);
+    try {
+      const res = await fetch(`/api/mix-designs/${mix.id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) {
+        setMixError(data.error ?? "Could not delete");
+        return;
+      }
+      router.refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function addMaterial(e: React.FormEvent) {
     e.preventDefault();
@@ -1183,30 +1386,257 @@ function MaterialsSection({
 
       <Card>
         <CardHeader>
-          <CardTitle>Mix designs (drive the consumption audit)</CardTitle>
+          <CardTitle>Mix designs — locked rates drive the consumption audit</CardTitle>
+          <p className="mt-1 text-sm text-slate-500">
+            Enter each mix the way your cement audit reads: PCC 1:4:8 → 3.37 bags/m³, brick
+            mortar 1:6 → 1.25 bags/m³… A <strong>Locked</strong> mix raises audit flags on
+            over-consumption; <strong>Provisional</strong> flags are marked &quot;(prov.)&quot;;
+            a <strong>TBD</strong> mix is reported but never flagged until its rate is fixed.
+            Constants: 1 bag = 50 kg ≈ 0.0347 m³ · wet→dry factor 1.52.
+          </p>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
+          {mixError ? (
+            <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{mixError}</p>
+          ) : null}
           {mixes.length === 0 ? (
-            <p className="text-sm text-slate-500">No mixes yet — the seed script adds M20/M25.</p>
+            <p className="text-sm text-slate-500">No mixes yet — add your first below.</p>
           ) : (
             <div className="space-y-2">
               {mixes.map((mix) => (
                 <div key={mix.id} className="rounded-lg bg-slate-50 px-3 py-2 text-sm">
-                  <span className="font-medium">{mix.code}</span>{" "}
-                  <span className="text-slate-500">{mix.name}</span>
-                  <p className="text-xs text-slate-400">
-                    per cum:{" "}
-                    {mix.coefficients
-                      .map(
-                        (c) =>
-                          `${materialById.get(c.materialId)?.name ?? "?"} ${Number(c.qtyPerUnit)}`
-                      )
-                      .join(" · ")}
-                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium">{mix.name}</span>
+                    <span className="text-xs text-slate-400">{mix.code}</span>
+                    <Badge tone={MIX_STATUS_META[mix.status]?.tone ?? "neutral"}>
+                      {MIX_STATUS_META[mix.status]?.label ?? mix.status}
+                    </Badge>
+                    <span className="ml-auto">
+                      <button
+                        className="rounded px-1.5 py-0.5 text-xs font-medium text-brand-700 hover:bg-brand-50"
+                        onClick={() => (mixEditId === mix.id ? setMixEditId(null) : startMixEdit(mix))}
+                      >
+                        {mixEditId === mix.id ? "Cancel" : "Edit"}
+                      </button>
+                      <button
+                        className="ml-1 rounded px-1.5 py-0.5 text-xs font-medium text-red-600 hover:bg-red-50"
+                        disabled={busy}
+                        onClick={() => deleteMix(mix)}
+                      >
+                        Delete
+                      </button>
+                    </span>
+                  </div>
+                  {mixEditId === mix.id ? (
+                    <div className="mt-2 space-y-2 border-t border-slate-200 pt-2">
+                      {mixEdit.rows.map((r, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs">
+                          <span className="w-40 truncate text-slate-600">
+                            {materialById.get(r.materialId)?.name ?? "?"}
+                          </span>
+                          <Input
+                            type="number"
+                            step="0.001"
+                            min="0"
+                            value={r.qty}
+                            onChange={(e) =>
+                              setMixEdit((m) => ({
+                                ...m,
+                                rows: m.rows.map((row, j) => (j === i ? { ...row, qty: e.target.value } : row)),
+                              }))
+                            }
+                            className="w-28 py-1.5"
+                          />
+                          <span className="text-slate-500">
+                            {materialById.get(r.materialId)?.unit ?? ""} {BASIS_LABELS[mix.outputUnit] ?? `per ${mix.outputUnit}`}
+                          </span>
+                        </div>
+                      ))}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Select
+                          value={mixEdit.status}
+                          onChange={(e) => setMixEdit((m) => ({ ...m, status: e.target.value }))}
+                          className="w-64 py-1.5"
+                        >
+                          <option value="locked">Locked — audit flags raise</option>
+                          <option value="provisional">Provisional — flags say (prov.)</option>
+                          <option value="tbd">TBD — reported, not flagged</option>
+                        </Select>
+                        <Input
+                          value={mixEdit.note}
+                          onChange={(e) => setMixEdit((m) => ({ ...m, note: e.target.value }))}
+                          placeholder="Note, e.g. provisional until brick size confirmed"
+                          className="min-w-64 flex-1 py-1.5"
+                        />
+                        <Button className="px-3 py-1.5 text-xs" disabled={busy} onClick={() => saveMixEdit(mix)}>
+                          Save
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {mix.coefficients
+                        .map(
+                          (c) =>
+                            `${materialById.get(c.materialId)?.name ?? "?"} ${Number(c.qtyPerUnit)} ${materialById.get(c.materialId)?.unit ?? ""}`
+                        )
+                        .join(" · ")}{" "}
+                      {BASIS_LABELS[mix.outputUnit] ?? `per ${mix.outputUnit}`}
+                      {mix.note ? <span className="text-slate-400"> — {mix.note}</span> : null}
+                    </p>
+                  )}
                 </div>
               ))}
             </div>
           )}
+
+          <form onSubmit={addMix} className="space-y-3 rounded-lg border border-slate-200 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Add mix design
+            </p>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div>
+                <Label>Mix type</Label>
+                <Select
+                  value={mixForm.type}
+                  onChange={(e) => {
+                    const type = e.target.value;
+                    const firstRatio = Object.keys(MIX_TYPES[type]?.ratios ?? {})[0] ?? "";
+                    applyPreset(type, firstRatio);
+                  }}
+                >
+                  {Object.keys(MIX_TYPES).map((t) => (
+                    <option key={t}>{t}</option>
+                  ))}
+                </Select>
+              </div>
+              <div>
+                <Label>Ratio / grade</Label>
+                {Object.keys(MIX_TYPES[mixForm.type]?.ratios ?? {}).length > 0 ? (
+                  <Select
+                    value={mixForm.ratio}
+                    onChange={(e) => applyPreset(mixForm.type, e.target.value)}
+                  >
+                    {Object.keys(MIX_TYPES[mixForm.type].ratios).map((r) => (
+                      <option key={r}>{r}</option>
+                    ))}
+                  </Select>
+                ) : (
+                  <Input
+                    value={mixForm.ratio}
+                    onChange={(e) => setMixForm({ ...mixForm, ratio: e.target.value })}
+                    placeholder="e.g. 1:1.5:3"
+                  />
+                )}
+              </div>
+              <div>
+                <Label>Name</Label>
+                <Input
+                  value={mixForm.name}
+                  onChange={(e) =>
+                    setMixForm({ ...mixForm, name: e.target.value, code: slugCode(e.target.value) })
+                  }
+                  placeholder="e.g. PCC 1:4:8"
+                  required
+                />
+              </div>
+              <div>
+                <Label>Coefficients are…</Label>
+                <Select
+                  value={mixForm.basis}
+                  onChange={(e) => setMixForm({ ...mixForm, basis: e.target.value })}
+                >
+                  {["CUM", "SQM", "MTR", "NOS"].map((u) => (
+                    <option key={u} value={u}>
+                      {BASIS_LABELS[u]}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            </div>
+            {mixForm.rows.map((r, i) => (
+              <div key={i} className="flex flex-wrap items-center gap-2">
+                <Select
+                  value={r.materialId}
+                  onChange={(e) =>
+                    setMixForm((f) => ({
+                      ...f,
+                      rows: f.rows.map((row, j) => (j === i ? { ...row, materialId: e.target.value } : row)),
+                    }))
+                  }
+                  className="w-56 py-1.5"
+                >
+                  {materials.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name} ({m.unit})
+                    </option>
+                  ))}
+                </Select>
+                <Input
+                  type="number"
+                  step="0.001"
+                  min="0"
+                  value={r.qty}
+                  onChange={(e) =>
+                    setMixForm((f) => ({
+                      ...f,
+                      rows: f.rows.map((row, j) => (j === i ? { ...row, qty: e.target.value } : row)),
+                    }))
+                  }
+                  className="w-28 py-1.5"
+                  placeholder="qty"
+                />
+                <span className="text-xs text-slate-500">
+                  {materialById.get(r.materialId)?.unit ?? ""} {BASIS_LABELS[mixForm.basis]}
+                  {i === 0 ? " (suggested — confirm before locking)" : ""}
+                </span>
+                {i > 0 ? (
+                  <button
+                    type="button"
+                    className="text-xs text-red-600"
+                    onClick={() =>
+                      setMixForm((f) => ({ ...f, rows: f.rows.filter((_, j) => j !== i) }))
+                    }
+                  >
+                    remove
+                  </button>
+                ) : null}
+              </div>
+            ))}
+            <button
+              type="button"
+              className="text-xs font-medium text-brand-700"
+              onClick={() =>
+                setMixForm((f) => ({ ...f, rows: [...f.rows, { materialId: "", qty: "" }] }))
+              }
+            >
+              + add another material (sand, aggregate…)
+            </button>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <Label>Audit status</Label>
+                <Select
+                  value={mixForm.status}
+                  onChange={(e) => setMixForm({ ...mixForm, status: e.target.value })}
+                >
+                  <option value="locked">Locked — audit flags raise on over-use</option>
+                  <option value="provisional">Provisional — flags say (prov.)</option>
+                  <option value="tbd">TBD — reported, never flagged</option>
+                </Select>
+              </div>
+              <div>
+                <Label>Note</Label>
+                <Input
+                  value={mixForm.note}
+                  onChange={(e) => setMixForm({ ...mixForm, note: e.target.value })}
+                  placeholder="e.g. provisional until brick size confirmed"
+                />
+              </div>
+            </div>
+            <Button type="submit" disabled={busy || !mixForm.name.trim()}>
+              {busy ? "Adding…" : "Add mix design"}
+            </Button>
+          </form>
         </CardContent>
       </Card>
 

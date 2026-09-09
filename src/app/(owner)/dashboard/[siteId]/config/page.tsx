@@ -51,6 +51,7 @@ export default async function ConfigPage({ params }: { params: Promise<{ siteId:
         isGroup: a.isGroup,
         parentId: a.parentId,
         contractorId: a.contractorId,
+        defaultMixId: a.defaultMixId,
         startDate: a.startDate ? a.startDate.toISOString().slice(0, 10) : "",
         category: a.category,
         boqQty: a.boqQty?.toString() ?? "",

@@ -282,6 +282,9 @@ model Activity {
   // it is SYNCED from the contractor on assignment so progress, labour and
   // delay-flag consumers keep working unchanged.
   contractorId              String?          @db.Uuid
+  // WORK ITEMS ONLY: the mix this sub-activity is built with (owner-set;
+  // pre-selected on the engineer's consumption form, overridable there).
+  defaultMixId              String?          @db.Uuid
 
   site   Site       @relation(fields: [siteId], references: [id])
   parent Activity?  @relation("wbs", fields: [parentId], references: [id])

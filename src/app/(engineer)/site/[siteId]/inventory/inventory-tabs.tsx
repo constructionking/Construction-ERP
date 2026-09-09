@@ -30,6 +30,7 @@ interface ActivityOpt {
   id: string;
   code: string;
   name: string;
+  defaultMixId?: string | null; // owner-set mix for this item (pre-selected)
   parent?: { name: string } | null;
 }
 interface MixOpt {
@@ -498,7 +499,16 @@ function ConsumeTab(
             </div>
             <div>
               <Label>Used on activity</Label>
-              <Select value={activityId} onChange={(e) => setActivityId(e.target.value)} required>
+              <Select
+                value={activityId}
+                onChange={(e) => {
+                  setActivityId(e.target.value);
+                  // Pre-select the mix the owner set for this item (overridable).
+                  const chosen = props.activityById.get(e.target.value);
+                  if (chosen?.defaultMixId) setMixDesignId(chosen.defaultMixId);
+                }}
+                required
+              >
                 <option value="">Select activity…</option>
                 {props.activities.map((a) => (
                   <option key={a.id} value={a.id}>

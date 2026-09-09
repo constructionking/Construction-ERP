@@ -35,6 +35,7 @@ interface ActivityRow {
   isGroup: boolean;
   parentId: string | null;
   contractorId: string | null;
+  defaultMixId: string | null; // work items only: the mix this item is built with
   startDate: string; // main activities only: own schedule anchor
   category: string;
   boqQty: string;
@@ -1521,15 +1522,24 @@ function slugCode(name: string): string {
 }
 
 function MaterialsSection({
+  siteId,
   materials,
   mixes,
   workTypes,
+  activities,
+  contractors,
 }: {
+  siteId: string;
   materials: MaterialRow[];
   mixes: MixRow[];
   workTypes: { id: string; name: string; defaultUnit: string }[];
+  activities: ActivityRow[];
+  contractors: ContractorRow[];
 }) {
   const router = useRouter();
+  const mixGroups = activities.filter((a) => a.isGroup);
+  const mixLeaves = activities.filter((a) => !a.isGroup);
+  const mixById = new Map(mixes.map((m) => [m.id, m]));
   const [material, setMaterial] = useState({
     name: "",
     unit: "CUM",
@@ -1554,6 +1564,9 @@ function MaterialsSection({
     basis: "CUM",
     status: "locked",
     note: "",
+    // Optional: attach the new mix straight to a work item ("a:<id>") or to
+    // every item assigned to a contractor ("c:<id>").
+    attachTo: "",
     rows: [{ materialId: cementDefault, qty: "3.4" }],
   }));
   const [mixError, setMixError] = useState<string | null>(null);
@@ -1614,7 +1627,36 @@ function MaterialsSection({
         setMixError(data.error ?? "Could not create the mix");
         return;
       }
-      setMixForm((f) => ({ ...f, name: "", code: "", rows: [{ materialId: cementDefault, qty: "" }] }));
+      // Attach the fresh mix to the chosen work item / contractor's items.
+      if (mixForm.attachTo && data.mix?.id) {
+        await applyMix(mixForm.attachTo, data.mix.id);
+      }
+      setMixForm((f) => ({ ...f, name: "", code: "", attachTo: "", rows: [{ materialId: cementDefault, qty: "" }] }));
+      router.refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // target: "a:<activityId>" or "c:<contractorId>"; mixId null clears.
+  async function applyMix(target: string, mixId: string | null) {
+    const [kind, id] = [target.slice(0, 1), target.slice(2)];
+    setBusy(true);
+    setMixError(null);
+    try {
+      const res = await fetch(`/api/sites/${siteId}/activities/apply-mix`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mixId,
+          ...(kind === "a" ? { activityId: id } : { contractorId: id }),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMixError(data.error ?? "Could not apply the mix");
+        return;
+      }
       router.refresh();
     } finally {
       setBusy(false);
@@ -1801,6 +1843,69 @@ function MaterialsSection({
 
       <Card>
         <CardHeader>
+          <CardTitle>Mix per work item — which mix each sub-activity is built with</CardTitle>
+          <p className="mt-1 text-sm text-slate-500">
+            Different items use different mixes (UGT raft on M25, road-edging PCC on 1:4:8…).
+            Pick the mix per sub-activity — the engineer&apos;s consumption form pre-selects it,
+            and the consumption audit checks bags against that mix&apos;s locked rate.
+          </p>
+        </CardHeader>
+        <CardContent>
+          {mixLeaves.length === 0 ? (
+            <p className="text-sm text-slate-500">
+              No work items yet — import or add activities first.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {[...mixGroups, null].map((g) => {
+                const children = mixLeaves.filter((a) => (g ? a.parentId === g.id : !a.parentId));
+                if (children.length === 0) return null;
+                return (
+                  <div key={g?.id ?? "__ungrouped"} className="rounded-lg border border-slate-200">
+                    <p className="border-b border-slate-100 bg-slate-50 px-3 py-1.5 text-sm font-semibold text-slate-800">
+                      {g ? g.name : mixGroups.length > 0 ? "Not under any main activity" : "Work items"}
+                    </p>
+                    <div className="space-y-1 px-3 py-2">
+                      {children.map((a) => {
+                        const assigned = a.defaultMixId ? mixById.get(a.defaultMixId) : null;
+                        return (
+                          <div key={a.id} className="flex flex-wrap items-center gap-2 text-sm">
+                            <span className="w-24 shrink-0 font-medium text-slate-700">{a.code}</span>
+                            <span className="min-w-0 flex-1 truncate text-slate-600" title={a.name}>
+                              {a.name}
+                            </span>
+                            {assigned && assigned.status !== "locked" ? (
+                              <Badge tone={assigned.status === "tbd" ? "red" : "amber"}>
+                                {assigned.status === "tbd" ? "mix TBD" : "mix provisional"}
+                              </Badge>
+                            ) : null}
+                            <Select
+                              value={a.defaultMixId ?? ""}
+                              disabled={busy}
+                              onChange={(e) => applyMix(`a:${a.id}`, e.target.value || null)}
+                              className="w-52 py-1.5"
+                            >
+                              <option value="">No mix / N.A.</option>
+                              {mixes.map((m) => (
+                                <option key={m.id} value={m.id}>
+                                  {m.name}
+                                </option>
+                              ))}
+                            </Select>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>Mix designs — locked rates drive the consumption audit</CardTitle>
           <p className="mt-1 text-sm text-slate-500">
             Enter each mix the way your cement audit reads: PCC 1:4:8 → 3.37 bags/m³, brick
@@ -1826,7 +1931,37 @@ function MaterialsSection({
                     <Badge tone={MIX_STATUS_META[mix.status]?.tone ?? "neutral"}>
                       {MIX_STATUS_META[mix.status]?.label ?? mix.status}
                     </Badge>
-                    <span className="ml-auto">
+                    <span className="ml-auto flex items-center gap-1">
+                      <Select
+                        value=""
+                        disabled={busy}
+                        onChange={(e) => {
+                          if (e.target.value) applyMix(e.target.value, mix.id);
+                          e.target.value = "";
+                        }}
+                        className="w-44 py-1 text-xs"
+                        title="Attach this mix to a work item or a contractor's items"
+                      >
+                        <option value="">Apply to…</option>
+                        {mixLeaves.length > 0 ? (
+                          <optgroup label="A work item">
+                            {mixLeaves.map((a) => (
+                              <option key={a.id} value={`a:${a.id}`}>
+                                {a.code} — {a.name}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ) : null}
+                        {contractors.length > 0 ? (
+                          <optgroup label="A contractor's items">
+                            {contractors.map((c) => (
+                              <option key={c.id} value={`c:${c.id}`}>
+                                {c.name}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ) : null}
+                      </Select>
                       <button
                         className="rounded px-1.5 py-0.5 text-xs font-medium text-brand-700 hover:bg-brand-50"
                         onClick={() => (mixEditId === mix.id ? setMixEditId(null) : startMixEdit(mix))}
@@ -2046,6 +2181,38 @@ function MaterialsSection({
                   onChange={(e) => setMixForm({ ...mixForm, note: e.target.value })}
                   placeholder="e.g. provisional until brick size confirmed"
                 />
+              </div>
+              <div className="sm:col-span-2">
+                <Label>Attach this mix to… (optional)</Label>
+                <Select
+                  value={mixForm.attachTo}
+                  onChange={(e) => setMixForm({ ...mixForm, attachTo: e.target.value })}
+                >
+                  <option value="">Nothing — just save the mix</option>
+                  {mixLeaves.length > 0 ? (
+                    <optgroup label="A work item">
+                      {[...mixGroups, null].flatMap((g) =>
+                        mixLeaves
+                          .filter((a) => (g ? a.parentId === g.id : !a.parentId))
+                          .map((a) => (
+                            <option key={a.id} value={`a:${a.id}`}>
+                              {g ? `${g.name} › ` : ""}
+                              {a.code} — {a.name}
+                            </option>
+                          ))
+                      )}
+                    </optgroup>
+                  ) : null}
+                  {contractors.length > 0 ? (
+                    <optgroup label="All items assigned to a contractor">
+                      {contractors.map((c) => (
+                        <option key={c.id} value={`c:${c.id}`}>
+                          {c.name} — every item assigned to them
+                        </option>
+                      ))}
+                    </optgroup>
+                  ) : null}
+                </Select>
               </div>
             </div>
             <Button type="submit" disabled={busy || !mixForm.name.trim()}>

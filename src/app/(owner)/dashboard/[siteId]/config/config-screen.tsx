@@ -816,19 +816,15 @@ function ActivitiesSection({
                 onChange={(e) => setForm({ ...form, contractorName: e.target.value })}
               />
             </div>
-            <div className="col-span-2">
-              <Label>Starts after (dependency)</Label>
-              <Select
-                value={form.dependsOn}
-                onChange={(e) => setForm({ ...form, dependsOn: e.target.value })}
-              >
-                <option value="">None</option>
-                {leaves.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.code} — {a.name}
-                  </option>
-                ))}
-              </Select>
+            <div className="col-span-2 sm:col-span-4">
+              <Label>Starts after (dependency) — main activity, then the item</Label>
+              <TargetPicker
+                groups={groups}
+                leaves={leaves}
+                value={form.dependsOn ? `a:${form.dependsOn}` : ""}
+                onChange={(t) => setForm({ ...form, dependsOn: t.startsWith("a:") ? t.slice(2) : "" })}
+                placeholder="None"
+              />
             </div>
             <div className="col-span-2 sm:col-span-4">
               {error ? (
@@ -1521,6 +1517,88 @@ function slugCode(name: string): string {
   return name.toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 20);
 }
 
+// Owner-side target picker: MAIN activity first, then the sub-activity under
+// it — the same two-step used on the engineer forms. Optionally also offers
+// contractors ("every item assigned to them") as first-step targets.
+// value: "" | "a:<activityId>" | "c:<contractorId>"
+const OTHER_KEY = "__other";
+function TargetPicker({
+  groups,
+  leaves,
+  contractors,
+  value,
+  onChange,
+  compact,
+  placeholder = "Select main activity…",
+}: {
+  groups: ActivityRow[];
+  leaves: ActivityRow[];
+  contractors?: ContractorRow[];
+  value: string;
+  onChange: (target: string) => void;
+  compact?: boolean;
+  placeholder?: string;
+}) {
+  const selectedLeaf = value.startsWith("a:") ? leaves.find((a) => a.id === value.slice(2)) : undefined;
+  const derivedMain = value.startsWith("c:")
+    ? value
+    : selectedLeaf
+      ? selectedLeaf.parentId ?? OTHER_KEY
+      : "";
+  const [mainSel, setMainSel] = useState(derivedMain);
+  const main = value ? derivedMain : mainSel;
+  const hasOther = leaves.some((a) => !a.parentId);
+  const subItems = main === OTHER_KEY ? leaves.filter((a) => !a.parentId) : leaves.filter((a) => a.parentId === main);
+  const cls = compact ? "py-1 text-xs" : "";
+  return (
+    <div className={cn("flex flex-wrap gap-2", compact ? "items-center" : "flex-col sm:flex-row")}>
+      <Select
+        value={main}
+        onChange={(e) => {
+          const v = e.target.value;
+          setMainSel(v);
+          if (v.startsWith("c:")) onChange(v);
+          else onChange("");
+        }}
+        className={cn(cls, compact ? "w-48" : "sm:flex-1")}
+      >
+        <option value="">{placeholder}</option>
+        <optgroup label="Main activity">
+          {groups.map((g) => (
+            <option key={g.id} value={g.id}>
+              {g.name}
+            </option>
+          ))}
+          {hasOther ? <option value={OTHER_KEY}>Other items (no main activity)</option> : null}
+        </optgroup>
+        {contractors && contractors.length > 0 ? (
+          <optgroup label="A contractor — every item assigned to them">
+            {contractors.map((c) => (
+              <option key={c.id} value={`c:${c.id}`}>
+                {c.name}
+              </option>
+            ))}
+          </optgroup>
+        ) : null}
+      </Select>
+      {main && !main.startsWith("c:") ? (
+        <Select
+          value={selectedLeaf ? `a:${selectedLeaf.id}` : ""}
+          onChange={(e) => onChange(e.target.value)}
+          className={cn(cls, compact ? "w-56" : "sm:flex-1")}
+        >
+          <option value="">Select sub-activity…</option>
+          {subItems.map((a) => (
+            <option key={a.id} value={`a:${a.id}`}>
+              {a.code} — {a.name}
+            </option>
+          ))}
+        </Select>
+      ) : null}
+    </div>
+  );
+}
+
 function MaterialsSection({
   siteId,
   materials,
@@ -1931,37 +2009,18 @@ function MaterialsSection({
                     <Badge tone={MIX_STATUS_META[mix.status]?.tone ?? "neutral"}>
                       {MIX_STATUS_META[mix.status]?.label ?? mix.status}
                     </Badge>
-                    <span className="ml-auto flex items-center gap-1">
-                      <Select
+                    <span className="ml-auto flex flex-wrap items-center gap-1">
+                      <TargetPicker
+                        groups={mixGroups}
+                        leaves={mixLeaves}
+                        contractors={contractors}
                         value=""
-                        disabled={busy}
-                        onChange={(e) => {
-                          if (e.target.value) applyMix(e.target.value, mix.id);
-                          e.target.value = "";
+                        onChange={(t) => {
+                          if (t) applyMix(t, mix.id);
                         }}
-                        className="w-44 py-1 text-xs"
-                        title="Attach this mix to a work item or a contractor's items"
-                      >
-                        <option value="">Apply to…</option>
-                        {mixLeaves.length > 0 ? (
-                          <optgroup label="A work item">
-                            {mixLeaves.map((a) => (
-                              <option key={a.id} value={`a:${a.id}`}>
-                                {a.code} — {a.name}
-                              </option>
-                            ))}
-                          </optgroup>
-                        ) : null}
-                        {contractors.length > 0 ? (
-                          <optgroup label="A contractor's items">
-                            {contractors.map((c) => (
-                              <option key={c.id} value={`c:${c.id}`}>
-                                {c.name}
-                              </option>
-                            ))}
-                          </optgroup>
-                        ) : null}
-                      </Select>
+                        compact
+                        placeholder="Apply to…"
+                      />
                       <button
                         className="rounded px-1.5 py-0.5 text-xs font-medium text-brand-700 hover:bg-brand-50"
                         onClick={() => (mixEditId === mix.id ? setMixEditId(null) : startMixEdit(mix))}
@@ -2183,36 +2242,15 @@ function MaterialsSection({
                 />
               </div>
               <div className="sm:col-span-2">
-                <Label>Attach this mix to… (optional)</Label>
-                <Select
+                <Label>Attach this mix to… (optional) — main activity, then the item</Label>
+                <TargetPicker
+                  groups={mixGroups}
+                  leaves={mixLeaves}
+                  contractors={contractors}
                   value={mixForm.attachTo}
-                  onChange={(e) => setMixForm({ ...mixForm, attachTo: e.target.value })}
-                >
-                  <option value="">Nothing — just save the mix</option>
-                  {mixLeaves.length > 0 ? (
-                    <optgroup label="A work item">
-                      {[...mixGroups, null].flatMap((g) =>
-                        mixLeaves
-                          .filter((a) => (g ? a.parentId === g.id : !a.parentId))
-                          .map((a) => (
-                            <option key={a.id} value={`a:${a.id}`}>
-                              {g ? `${g.name} › ` : ""}
-                              {a.code} — {a.name}
-                            </option>
-                          ))
-                      )}
-                    </optgroup>
-                  ) : null}
-                  {contractors.length > 0 ? (
-                    <optgroup label="All items assigned to a contractor">
-                      {contractors.map((c) => (
-                        <option key={c.id} value={`c:${c.id}`}>
-                          {c.name} — every item assigned to them
-                        </option>
-                      ))}
-                    </optgroup>
-                  ) : null}
-                </Select>
+                  onChange={(t) => setMixForm({ ...mixForm, attachTo: t })}
+                  placeholder="Nothing — just save the mix"
+                />
               </div>
             </div>
             <Button type="submit" disabled={busy || !mixForm.name.trim()}>

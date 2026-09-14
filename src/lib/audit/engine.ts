@@ -5,6 +5,7 @@ import { evaluateReceiptVsRequisition } from "./rules/receipt-checks";
 import { evaluateLabourCost } from "./rules/labour-cost";
 import { labourCostPerUnit, inclusiveDays } from "@/lib/labour";
 import { businessDateIST, dateOnly } from "@/lib/versioning/day-close";
+import { receiptEstimateGapPct, receiptEstimateSeverity } from "@/lib/telemetry/steel";
 
 // ---------------------------------------------------------------------------
 // Cross-cutting audit engine. Rules are pure functions in ./rules; this file
@@ -194,6 +195,45 @@ export async function runReceiptAudits(receiptId: string) {
   if (!receipt) return;
 
   const material = await prisma.material.findUnique({ where: { id: receipt.materialId } });
+
+  // Camera/AI delivery estimate vs the engineer's receipt qty. The human
+  // figure stands; a wide gap is surfaced to the owner, never auto-corrected.
+  if (receipt.estimateId) {
+    const estimate = await prisma.deliveryEstimate.findUnique({ where: { id: receipt.estimateId } });
+    if (estimate && estimate.source !== "manual") {
+      const gapPct = receiptEstimateGapPct(Number(receipt.qty), Number(estimate.estimatedQty));
+      const severity = receiptEstimateSeverity(gapPct);
+      if (severity) {
+        const flag = await raiseFlag({
+          siteId: receipt.siteId,
+          rule: "ai_receipt_discrepancy",
+          severity,
+          subjectType: "material_receipt",
+          subjectId: receipt.entityId,
+          details: {
+            materialId: receipt.materialId,
+            materialName: material?.name,
+            receiptQty: Number(receipt.qty),
+            estimatedQty: Number(estimate.estimatedQty),
+            unit: receipt.unit,
+            gapPct,
+            source: estimate.source,
+            count: estimate.count,
+            diameterMm: estimate.diameterMm ? Number(estimate.diameterMm) : null,
+            confidence: estimate.confidence ? Number(estimate.confidence) : null,
+            supplier: receipt.supplier,
+            challanNo: receipt.challanNo,
+            estimateId: estimate.id,
+          },
+          title: `Receipt ${gapPct! > 0 ? "above" : "below"} camera estimate by ${Math.abs(gapPct!).toFixed(0)}%`,
+          body: `${material?.name ?? "Material"} from ${receipt.supplier} (challan ${receipt.challanNo}): engineer recorded ${Number(receipt.qty)} ${receipt.unit}, ${estimate.source === "ai" ? "AI count" : "heap scan"} estimated ${Number(estimate.estimatedQty)} ${estimate.unit}`,
+        });
+        await prisma.deliveryEstimate.update({ where: { id: estimate.id }, data: { flagId: flag.id } });
+      } else {
+        await autoResolveFlag("ai_receipt_discrepancy", "material_receipt", receipt.entityId);
+      }
+    }
+  }
 
   if (!receipt.qualityAdequate) {
     await raiseFlag({

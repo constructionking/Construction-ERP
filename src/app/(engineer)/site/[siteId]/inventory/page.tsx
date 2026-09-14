@@ -2,6 +2,8 @@ import { prisma } from "@/lib/db";
 import { requireSiteRolePage } from "@/lib/auth/page-guard";
 import { computeSiteStock } from "@/lib/inventory/stock";
 import { businessDateIST, dateOnly } from "@/lib/versioning/day-close";
+import { aiEnabled } from "@/lib/ai/client";
+import { cumToCft } from "@/lib/telemetry/steel";
 import { InventoryTabs } from "./inventory-tabs";
 
 export default async function InventoryPage({
@@ -19,9 +21,9 @@ export default async function InventoryPage({
       // Leaves only: consumption is booked against work items, not headings.
       where: { siteId, isGroup: false },
       orderBy: { sequence: "asc" },
-      select: { id: true, code: true, name: true, defaultMixId: true, parent: { select: { name: true } } },
+      select: { id: true, code: true, name: true, defaultMixId: true, parent: { select: { id: true, name: true } } },
     }),
-    prisma.mixDesign.findMany({ orderBy: { code: "asc" } }),
+    prisma.mixDesign.findMany({ orderBy: { code: "asc" }, include: { coefficients: true } }),
     prisma.materialReceipt.findMany({
       where: { siteId, isCurrent: true, status: "submitted" },
       orderBy: { createdAt: "desc" },
@@ -35,15 +37,58 @@ export default async function InventoryPage({
   ]);
 
   const today = businessDateIST();
+  // Today's recorded work per activity — pre-fills the report's theoretical column.
+  const [progressToday, recentScans] = await Promise.all([
+    prisma.progressEntry.groupBy({
+      by: ["activityId"],
+      where: { siteId, isCurrent: true, status: "submitted", entryDate: new Date(today) },
+      _sum: { qtyDone: true },
+    }),
+    // Heap scans from the last 3 days — a delivered heap the engineer measured
+    // can be pulled straight into the receipt.
+    prisma.stockpileScan.findMany({
+      where: {
+        siteId,
+        status: { in: ["computed", "accepted"] },
+        createdAt: { gte: new Date(Date.now() - 3 * 86_400_000) },
+      },
+      include: { result: true },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+    }),
+  ]);
 
   return (
     <InventoryTabs
       siteId={siteId}
       today={today}
       stock={stock}
-      materials={materials.map((m) => ({ id: m.id, name: m.name, unit: m.unit }))}
+      materials={materials.map((m) => ({ id: m.id, name: m.name, unit: m.unit, category: m.category }))}
       activities={activities}
-      mixDesigns={mixDesigns.map((m) => ({ id: m.id, code: m.code, name: m.name }))}
+      mixDesigns={mixDesigns.map((m) => ({
+        id: m.id,
+        code: m.code,
+        name: m.name,
+        outputUnit: m.outputUnit,
+        status: m.status,
+        coefficients: m.coefficients.map((c) => ({ materialId: c.materialId, qtyPerUnit: Number(c.qtyPerUnit) })),
+      }))}
+      progressToday={Object.fromEntries(
+        progressToday.map((p) => [p.activityId, Number(p._sum.qtyDone ?? 0)])
+      )}
+      aiAvailable={aiEnabled()}
+      recentScans={recentScans
+        .filter((s) => s.result)
+        .map((s) => ({
+          id: s.id,
+          materialId: s.materialId,
+          method: s.method,
+          volumeCum: Number(s.result!.computedVolumeCum ?? 0),
+          volumeCft: cumToCft(Number(s.result!.computedVolumeCum ?? 0)),
+          qty: Number(s.result!.computedQty ?? 0),
+          unit: s.result!.qtyUnit,
+          when: s.createdAt.toISOString(),
+        }))}
       receipts={receipts.map((r) => ({
         id: r.id,
         entityId: r.entityId,

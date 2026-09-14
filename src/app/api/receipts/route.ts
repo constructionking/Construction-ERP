@@ -16,9 +16,24 @@ export const POST = withApi(async (req: NextRequest) => {
     throw new ApiError(400, `${material.name} is tracked in ${material.unit}`);
   }
 
+  if (data.estimateId) {
+    const estimate = await prisma.deliveryEstimate.findUnique({ where: { id: data.estimateId } });
+    if (!estimate || estimate.siteId !== data.siteId || estimate.materialId !== data.materialId) {
+      throw new ApiError(400, "Delivery estimate does not match this site/material");
+    }
+  }
+
   const receipt = await prisma.materialReceipt.create({
     data: { ...data, status: "submitted", createdById: ctx.userId },
   });
+  if (data.estimateId) {
+    // Tie the estimate to the record it was checked against (estimate row is
+    // ours, not a versioned record — safe to update).
+    await prisma.deliveryEstimate.update({
+      where: { id: data.estimateId },
+      data: { receiptEntityId: receipt.entityId },
+    });
+  }
 
   await runReceiptAudits(receipt.id).catch((err) =>
     console.error("receipt audit failed", err)

@@ -55,6 +55,8 @@ export const materialReceiptSchema = z.object({
   photoIds: z.array(uuid).max(10).default([]),
   requisitionEntityId: uuid.optional(),
   receivedDate: dateStr,
+  // Camera/AI delivery estimate the engineer checked this qty against.
+  estimateId: uuid.optional(),
 });
 
 export const consumptionEntrySchema = z.object({

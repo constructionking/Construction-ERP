@@ -3,25 +3,14 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Input, Label, Select, Textarea } from "@/components/ui";
+import { ActivityPicker } from "@/components/ActivityPicker";
 
 interface ActivityOption {
   id: string;
   code: string;
   name: string;
   unit: string | null;
-  parent?: { name: string } | null; // main activity this item sits under
-}
-
-// Group options under their main activity for a scannable dropdown.
-function groupByParent(activities: ActivityOption[]) {
-  const groups = new Map<string, ActivityOption[]>();
-  for (const a of activities) {
-    const key = a.parent?.name ?? "";
-    const list = groups.get(key) ?? [];
-    list.push(a);
-    groups.set(key, list);
-  }
-  return [...groups.entries()];
+  parent?: { id: string; name: string } | null; // main activity this item sits under
 }
 
 async function uploadPhoto(
@@ -132,34 +121,13 @@ export function ProgressForm({
 
   return (
     <form onSubmit={submit} className="space-y-3">
-      <div>
-        <Label htmlFor="activity">Activity</Label>
-        <Select
-          id="activity"
-          value={activityId}
-          onChange={(e) => setActivityId(e.target.value)}
-          required
-        >
-          <option value="">Select activity…</option>
-          {groupByParent(activities).map(([groupName, items]) =>
-            groupName ? (
-              <optgroup key={groupName} label={groupName}>
-                {items.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.code} — {a.name}
-                  </option>
-                ))}
-              </optgroup>
-            ) : (
-              items.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.code} — {a.name}
-                </option>
-              ))
-            ),
-          )}
-        </Select>
-      </div>
+      <ActivityPicker
+        activities={activities}
+        value={activityId}
+        onChange={setActivityId}
+        required
+        idPrefix="progress"
+      />
 
       <div className="grid grid-cols-2 gap-3">
         <div>

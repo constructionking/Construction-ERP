@@ -21,7 +21,7 @@ export default async function ProgressPage({
       // Leaves only: main-activity headings are never progress targets.
       where: { siteId, isGroup: false },
       orderBy: { sequence: "asc" },
-      select: { id: true, code: true, name: true, unit: true, parent: { select: { name: true } } },
+      select: { id: true, code: true, name: true, unit: true, parent: { select: { id: true, name: true } } },
     }),
     prisma.progressEntry.findMany({
       where: { siteId, isCurrent: true, status: "submitted" },
@@ -58,6 +58,7 @@ export default async function ProgressPage({
               code: a.code,
               name: a.name,
               unit: a.unit,
+              parent: a.parent,
             }))}
           />
         </CardContent>

@@ -178,6 +178,7 @@ enum AuditRule {
   receipt_requisition_mismatch
   ai_progress_discrepancy
   quality_inadequate
+  ai_receipt_discrepancy
 }
 
 enum FlagSeverity {
@@ -431,6 +432,33 @@ model Photo {
   @@map("photos")
 }
 
+// What the camera/AI estimated a DELIVERY to be (steel bar count → kg, heap
+// scan → CUM), stored beside the engineer's receipt qty, never replacing it.
+model DeliveryEstimate {
+  id              String   @id @default(uuid()) @db.Uuid
+  siteId          String   @db.Uuid
+  materialId      String   @db.Uuid
+  kind            String // steel_count | scan_volume
+  source          String // ai | manual | scan
+  photoIds        String[] @db.Uuid
+  scanId          String?  @db.Uuid
+  count           Int?
+  diameterMm      Decimal? @db.Decimal(6, 2)
+  lengthM         Decimal? @db.Decimal(6, 2)
+  estimatedQty    Decimal  @db.Decimal(14, 3)
+  unit            Unit
+  confidence      Decimal? @db.Decimal(4, 3)
+  rationale       String?
+  model           String?
+  receiptEntityId String?  @db.Uuid
+  flagId          String?  @db.Uuid
+  createdById     String   @db.Uuid
+  createdAt       DateTime @default(now())
+
+  @@index([siteId, createdAt])
+  @@map("delivery_estimates")
+}
+
 model AiProgressEstimate {
   id          String   @id @default(uuid()) @db.Uuid
   siteId      String   @db.Uuid
@@ -607,6 +635,8 @@ model MaterialReceipt {
   photoIds            String[] @db.Uuid
   requisitionEntityId String?  @db.Uuid
   receivedDate        DateTime @db.Date
+  // Camera/AI delivery estimate the engineer checked this receipt against.
+  estimateId          String?  @db.Uuid
 
   @@index([siteId, receivedDate])
   @@index([entityId])

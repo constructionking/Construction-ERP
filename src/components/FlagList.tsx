@@ -22,6 +22,7 @@ const RULE_LABELS: Record<string, string> = {
   scan_variance: "Scan variance",
   receipt_requisition_mismatch: "Receipt exceeds request",
   ai_progress_discrepancy: "Photos vs reported progress",
+  ai_receipt_discrepancy: "Delivery vs camera estimate",
   quality_inadequate: "Quality issue",
 };
 

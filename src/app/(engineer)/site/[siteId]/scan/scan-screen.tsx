@@ -14,6 +14,38 @@ import {
   Select,
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import { analyzeFrame, type FrameQuality } from "@/components/GuidedCapture";
+
+// Live coaching over the scan viewfinder: light + sharpness read off the
+// video every half second, so the engineer fixes a bad frame before capturing.
+function LiveQualityPills({ videoRef }: { videoRef: React.RefObject<HTMLVideoElement | null> }) {
+  const probeRef = useRef<HTMLCanvasElement | null>(null);
+  const [q, setQ] = useState<FrameQuality | null>(null);
+  useEffect(() => {
+    const probe = probeRef.current ?? document.createElement("canvas");
+    probeRef.current = probe;
+    const id = window.setInterval(() => {
+      if (videoRef.current) setQ(analyzeFrame(videoRef.current, probe));
+    }, 500);
+    return () => window.clearInterval(id);
+  }, [videoRef]);
+  const pill = (ok: boolean | null, label: string) => (
+    <span
+      className={cn(
+        "rounded-full px-2 py-0.5 text-[11px] font-semibold",
+        ok === null ? "bg-slate-200 text-slate-600" : ok ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
+      )}
+    >
+      {label}
+    </span>
+  );
+  return (
+    <div className="pointer-events-none absolute left-2 top-2 flex flex-wrap gap-1">
+      {pill(q ? q.light === "ok" : null, q ? (q.light === "dark" ? "Too dark" : q.light === "bright" ? "Too bright — avoid the sun" : "Light ✓") : "Light …")}
+      {pill(q ? q.sharp : null, q ? (q.sharp ? "Sharp ✓" : "Hold steady") : "Focus …")}
+    </div>
+  );
+}
 
 interface MaterialOpt {
   id: string;
@@ -456,10 +488,15 @@ function OrbitCapture({
       ) : (
         <Card>
           <CardContent className="space-y-3 pt-4">
-            <div className="overflow-hidden rounded-lg bg-black">
+            <div className="relative overflow-hidden rounded-lg bg-black">
               {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
               <video ref={videoRef} playsInline muted className="h-64 w-full object-cover" />
+              <LiveQualityPills videoRef={videoRef} />
             </div>
+            <p className="text-xs text-slate-500">
+              Keep the WHOLE pile and the marker in frame; move a couple of steps between shots; the
+              pills go green when the frame is usable.
+            </p>
             <div>
               <div className="mb-1 flex justify-between text-xs text-slate-500">
                 <span>

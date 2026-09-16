@@ -80,7 +80,7 @@ const CATEGORIES = [
   "earthwork", "concreting", "reinforcement", "shuttering", "masonry",
   "plaster", "waterproofing", "flooring", "finishes", "external", "general",
 ];
-const UNITS = ["CUM", "SQM", "MTR", "BAG", "NOS", "KG", "TON"];
+const UNITS = ["CUM", "SQM", "MTR", "BAG", "NOS", "KG", "TON", "CFT", "LTR", "SET", "DAY"];
 const WINDOWS = ["until_day_close", "same_day", "until_actioned", "never"];
 const POLICY_LABELS: Record<string, string> = {
   progress_entry: "Progress entries",
@@ -1884,7 +1884,7 @@ function MaterialsSection({
                 value={material.category}
                 onChange={(e) => setMaterial({ ...material, category: e.target.value })}
               >
-                {["cement", "sand", "aggregate", "brick", "steel", "other"].map((c) => (
+                {["cement", "sand", "aggregate", "brick", "steel", "tool", "consumable", "other"].map((c) => (
                   <option key={c}>{c}</option>
                 ))}
               </Select>

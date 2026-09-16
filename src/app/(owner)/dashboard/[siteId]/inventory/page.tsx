@@ -23,11 +23,37 @@ export default async function InventoryReportPage({
   ]);
   const materialById = new Map(materials.map((m) => [m.id, m]));
 
+  // Stock grouped under the category the item belongs to — cement, sand,
+  // aggregate, brick, steel, tools & equipment, consumables, other.
+  const CATEGORY_ORDER = ["cement", "sand", "aggregate", "brick", "steel", "tool", "consumable", "other"];
+  const CATEGORY_LABELS: Record<string, string> = {
+    cement: "Cement",
+    sand: "Sand",
+    aggregate: "Aggregate",
+    brick: "Bricks & blocks",
+    steel: "Steel",
+    tool: "Tools & equipment",
+    consumable: "Consumables",
+    other: "Other",
+  };
+  const byCategory = new Map<string, typeof stock>();
+  for (const line of stock) {
+    byCategory.set(line.category, [...(byCategory.get(line.category) ?? []), line]);
+  }
+  const orderedCategories = [
+    ...CATEGORY_ORDER.filter((c) => byCategory.has(c)),
+    ...[...byCategory.keys()].filter((c) => !CATEGORY_ORDER.includes(c)),
+  ];
+
   return (
     <div className="space-y-4">
       <Card>
         <CardHeader>
           <CardTitle>Running stock (book balance vs latest physical scan)</CardTitle>
+          <p className="mt-1 text-sm text-slate-500">
+            Everything received at site — including items engineers requested by name once you
+            approved them — grouped by category.
+          </p>
         </CardHeader>
         <CardContent>
           {stock.length === 0 ? (
@@ -45,7 +71,16 @@ export default async function InventoryReportPage({
                 </tr>
               </thead>
               <tbody>
-                {stock.map((line) => (
+                {orderedCategories.flatMap((category) => [
+                  <tr key={`cat-${category}`} className="bg-slate-50">
+                    <Td colSpan={6} className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      {CATEGORY_LABELS[category] ?? category}
+                      <span className="ml-1.5 font-normal normal-case tracking-normal text-slate-400">
+                        {byCategory.get(category)!.length} item{byCategory.get(category)!.length === 1 ? "" : "s"}
+                      </span>
+                    </Td>
+                  </tr>,
+                  ...byCategory.get(category)!.map((line) => (
                   <tr key={line.materialId}>
                     <Td className="font-medium">
                       {line.name} <span className="text-xs text-slate-400">{line.unit}</span>
@@ -74,7 +109,8 @@ export default async function InventoryReportPage({
                       )}
                     </Td>
                   </tr>
-                ))}
+                  )),
+                ])}
               </tbody>
             </Table>
           )}

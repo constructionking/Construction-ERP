@@ -17,7 +17,7 @@ export const GET = withApi(async () => {
 const createSchema = z.object({
   name: z.string().trim().min(2).max(120),
   unit: unitEnum,
-  category: z.enum(["cement", "sand", "aggregate", "brick", "steel", "other"]),
+  category: z.enum(["cement", "sand", "aggregate", "brick", "steel", "tool", "consumable", "other"]),
   spec: z.string().trim().max(200).optional(),
   densityKgPerCum: z.number().positive().optional(),
   unitsPerCum: z.number().positive().optional(),

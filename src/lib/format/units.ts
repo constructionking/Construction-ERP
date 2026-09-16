@@ -8,14 +8,18 @@ export const UNIT_LABELS: Record<Unit, string> = {
   NOS: "nos",
   KG: "kg",
   TON: "ton",
+  CFT: "cft",
+  LTR: "litre",
+  SET: "set",
+  DAY: "days",
 };
 
-export const ALL_UNITS: Unit[] = ["CUM", "SQM", "MTR", "BAG", "NOS", "KG", "TON"];
+export const ALL_UNITS: Unit[] = ["CUM", "SQM", "MTR", "BAG", "NOS", "KG", "TON", "CFT", "LTR", "SET", "DAY"];
 
 export function formatQty(qty: number | string, unit: Unit): string {
   const n = typeof qty === "string" ? Number(qty) : qty;
   if (!Number.isFinite(n)) return "—";
-  const digits = unit === "NOS" || unit === "BAG" ? 0 : 2;
+  const digits = unit === "NOS" || unit === "BAG" || unit === "SET" || unit === "DAY" ? 0 : 2;
   return `${n.toLocaleString("en-IN", { maximumFractionDigits: digits })} ${UNIT_LABELS[unit]}`;
 }
 

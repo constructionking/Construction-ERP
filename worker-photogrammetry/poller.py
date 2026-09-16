@@ -89,6 +89,8 @@ def load_scan(conn, scan_id: str):
 def volume_to_qty(volume_cum: float, unit: str, density, units_per_cum):
     if unit == "CUM":
         return volume_cum
+    if unit == "CFT":
+        return volume_cum * 35.3147
     if unit in ("NOS", "BAG") and units_per_cum is not None:
         return volume_cum * float(units_per_cum)
     if unit == "KG" and density is not None:

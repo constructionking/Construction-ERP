@@ -98,6 +98,11 @@ interface DeliveryEstimateUse {
   qty: number;
   summary: string;
 }
+interface ApprovedDemand {
+  entityId: string;
+  createdAt: string;
+  lines: { index: number; item: string; type: string; qty: number; unit: string }[];
+}
 
 const TABS = ["Stock", "Receive", "Consume"] as const;
 
@@ -111,6 +116,7 @@ export function InventoryTabs(props: {
   progressToday: Record<string, number>; // activityId → qty recorded today
   aiAvailable: boolean;
   recentScans: RecentScan[];
+  approvedDemands: ApprovedDemand[];
   receipts: ReceiptRow[];
   consumption: ConsumptionRow[];
 }) {
@@ -205,10 +211,58 @@ function ReceiveTab(
   const [qualityRemarks, setQualityRemarks] = useState("");
   const [photoIds, setPhotoIds] = useState<string[]>([]);
   const [estimate, setEstimate] = useState<DeliveryEstimateUse | null>(null);
+  // Receiving against an owner-approved demand line.
+  const [demandKey, setDemandKey] = useState("");
+  const [demandInfo, setDemandInfo] = useState<{ item: string; remaining: number; unit: string; created: boolean } | null>(null);
+  const [demandNeedsUnit, setDemandNeedsUnit] = useState<{ item: string; typedUnit: string } | null>(null);
+  const [demandUnit, setDemandUnit] = useState("");
+  // Master rows created on the fly from a demand line (not yet in props.materials).
+  const [extraMaterials, setExtraMaterials] = useState<MaterialOpt[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  const material = props.materialById.get(materialId);
+  const allMaterials = [...props.materials, ...extraMaterials.filter((e) => !props.materialById.has(e.id))];
+  const material = props.materialById.get(materialId) ?? extraMaterials.find((m) => m.id === materialId);
+  const demandEntityId = demandKey ? demandKey.split(":")[0] : undefined;
+
+  async function resolveDemand(key: string, unitOverride?: string) {
+    setDemandKey(key);
+    setDemandInfo(null);
+    setDemandNeedsUnit(null);
+    setEstimate(null);
+    if (!key) return;
+    const [entityId, idx] = key.split(":");
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/receipts/from-demand", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          siteId: props.siteId,
+          requisitionEntityId: entityId,
+          lineIndex: Number(idx),
+          ...(unitOverride ? { unit: unitOverride } : {}),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMsg({ ok: false, text: data.error ?? "Could not load the request line" });
+        return;
+      }
+      if (data.needsUnit) {
+        setDemandNeedsUnit({ item: data.item, typedUnit: data.typedUnit });
+        return;
+      }
+      const m: MaterialOpt = data.material;
+      setExtraMaterials((xs) => (xs.some((x) => x.id === m.id) ? xs : [...xs, m]));
+      setMaterialId(m.id);
+      setQty(data.remaining > 0 ? String(data.remaining) : "");
+      setDemandInfo({ item: data.line.item, remaining: data.remaining, unit: m.unit, created: data.created });
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function addPhoto(files: FileList | null) {
     if (!files?.length) return;
@@ -253,6 +307,7 @@ function ReceiveTab(
           photoIds,
           receivedDate: props.today,
           estimateId: estimate?.id,
+          requisitionEntityId: demandEntityId,
         }),
       });
       const data = await res.json();
@@ -272,6 +327,8 @@ function ReceiveTab(
       setQualityRemarks("");
       setPhotoIds([]);
       setEstimate(null);
+      setDemandKey("");
+      setDemandInfo(null);
       router.refresh();
     } finally {
       setBusy(false);
@@ -286,6 +343,51 @@ function ReceiveTab(
         </CardHeader>
         <CardContent>
           <form onSubmit={submit} className="space-y-3">
+            {props.approvedDemands.length > 0 ? (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-3">
+                <Label>Receiving against an approved request?</Label>
+                <Select value={demandKey} onChange={(e) => void resolveDemand(e.target.value)} disabled={busy}>
+                  <option value="">No — a fresh receipt</option>
+                  {props.approvedDemands.map((d) => (
+                    <optgroup key={d.entityId} label={`Approved request · ${d.createdAt}`}>
+                      {d.lines.map((l) => (
+                        <option key={`${d.entityId}:${l.index}`} value={`${d.entityId}:${l.index}`}>
+                          {l.item} — {l.qty.toLocaleString("en-IN")} {l.unit}
+                          {l.type !== "material" ? ` (${l.type})` : ""}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </Select>
+                {demandNeedsUnit ? (
+                  <div className="mt-2 flex flex-wrap items-end gap-2">
+                    <div>
+                      <Label>
+                        Unit for “{demandNeedsUnit.item}” — the request said “{demandNeedsUnit.typedUnit}”
+                      </Label>
+                      <Select value={demandUnit} onChange={(e) => setDemandUnit(e.target.value)} className="w-40 py-1.5">
+                        <option value="">Pick a unit…</option>
+                        {["BAG", "CFT", "CUM", "KG", "TON", "NOS", "LTR", "MTR", "SQM", "SET", "DAY"].map((u) => (
+                          <option key={u} value={u}>
+                            {u}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+                    <Button type="button" variant="secondary" className="px-3 py-1.5 text-xs" disabled={!demandUnit || busy} onClick={() => resolveDemand(demandKey, demandUnit)}>
+                      Continue
+                    </Button>
+                  </div>
+                ) : null}
+                {demandInfo ? (
+                  <p className="mt-2 text-xs text-emerald-800">
+                    {demandInfo.created ? `“${demandInfo.item}” added to the stock register. ` : ""}
+                    Still due on this line: {demandInfo.remaining.toLocaleString("en-IN")} {demandInfo.unit}. What you
+                    receive here goes straight to the owner&apos;s inventory.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
             <div>
               <Label>Material</Label>
               <Select
@@ -295,9 +397,10 @@ function ReceiveTab(
                   setEstimate(null);
                 }}
                 required
+                disabled={!!demandInfo}
               >
                 <option value="">Select material…</option>
-                {props.materials.map((m) => (
+                {allMaterials.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name} ({m.unit})
                   </option>

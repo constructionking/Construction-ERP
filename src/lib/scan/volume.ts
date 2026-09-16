@@ -39,7 +39,7 @@ export function templateVolumeCum(shape: PileShape, dims: PileDimensions): numbe
 }
 
 export interface MaterialConversion {
-  unit: "CUM" | "SQM" | "MTR" | "BAG" | "NOS" | "KG" | "TON";
+  unit: "CUM" | "SQM" | "MTR" | "BAG" | "NOS" | "KG" | "TON" | "CFT" | "LTR" | "SET" | "DAY";
   densityKgPerCum: number | null;
   unitsPerCum: number | null;
 }
@@ -53,6 +53,8 @@ export function volumeToQty(volumeCum: number, material: MaterialConversion): nu
   switch (material.unit) {
     case "CUM":
       return volumeCum;
+    case "CFT":
+      return volumeCum * 35.3147;
     case "NOS":
     case "BAG":
       return material.unitsPerCum !== null ? volumeCum * material.unitsPerCum : null;

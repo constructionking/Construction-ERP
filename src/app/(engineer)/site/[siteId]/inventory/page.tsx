@@ -4,6 +4,7 @@ import { computeSiteStock } from "@/lib/inventory/stock";
 import { businessDateIST, dateOnly } from "@/lib/versioning/day-close";
 import { aiEnabled } from "@/lib/ai/client";
 import { cumToCft } from "@/lib/telemetry/steel";
+import { listRequisitionsWithState } from "@/lib/requisitions";
 import { InventoryTabs } from "./inventory-tabs";
 
 export default async function InventoryPage({
@@ -38,6 +39,16 @@ export default async function InventoryPage({
 
   const today = businessDateIST();
   // Today's recorded work per activity — pre-fills the report's theoretical column.
+  // Owner-approved material demands — receipts are recorded against their lines.
+  const approvedDemands = (await listRequisitionsWithState({ siteIds: [siteId], kind: "material" }))
+    .filter((r) => r.state === "approved" || r.state === "partially_approved")
+    .map((r) => ({
+      entityId: r.requisition.entityId,
+      createdAt: dateOnly(r.requisition.createdAt),
+      lines: (r.requisition.lines as Array<{ item?: string; type?: string; qty: number; unit: string }>).map(
+        (l, index) => ({ index, item: l.item ?? "Item", type: l.type ?? "material", qty: l.qty, unit: l.unit })
+      ),
+    }));
   const [progressToday, recentScans] = await Promise.all([
     prisma.progressEntry.groupBy({
       by: ["activityId"],
@@ -77,6 +88,7 @@ export default async function InventoryPage({
         progressToday.map((p) => [p.activityId, Number(p._sum.qtyDone ?? 0)])
       )}
       aiAvailable={aiEnabled()}
+      approvedDemands={approvedDemands}
       recentScans={recentScans
         .filter((s) => s.result)
         .map((s) => ({

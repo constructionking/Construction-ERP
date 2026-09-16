@@ -61,6 +61,10 @@ enum Unit {
   NOS
   KG
   TON
+  CFT // cubic feet — how sites talk about sand/aggregate
+  LTR
+  SET
+  DAY // hire days for tools/equipment
 }
 
 enum SiteStatus {
@@ -106,6 +110,8 @@ enum MaterialCategory {
   aggregate
   brick
   steel
+  tool
+  consumable
   other
 }
 
@@ -539,6 +545,8 @@ model Material {
   densityKgPerCum Decimal?         @db.Decimal(10, 2)
   unitsPerCum     Decimal?         @db.Decimal(10, 2)
   active          Boolean          @default(true)
+  // Created automatically from an approved demand line at first receipt.
+  fromDemand      Boolean          @default(false)
 
   @@map("materials")
 }

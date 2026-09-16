@@ -10,7 +10,7 @@ const dateStr = z
 
 const uuid = z.string().uuid();
 
-export const unitEnum = z.enum(["CUM", "SQM", "MTR", "BAG", "NOS", "KG", "TON"]);
+export const unitEnum = z.enum(["CUM", "SQM", "MTR", "BAG", "NOS", "KG", "TON", "CFT", "LTR", "SET", "DAY"]);
 
 // Mirrors prisma's ActivityCategory — single zod source for every route.
 export const categoryEnum = z.enum([

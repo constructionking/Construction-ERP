@@ -261,8 +261,13 @@ export async function runReceiptAudits(receiptId: string) {
       where: { entityId: receipt.requisitionEntityId, isCurrent: true },
     });
     if (requisition && requisition.kind === "material") {
-      const lines = requisition.lines as Array<{ materialId: string; qty: number }>;
-      const line = lines.find((l) => l.materialId === receipt.materialId);
+      const lines = requisition.lines as Array<{ materialId?: string; item?: string; qty: number }>;
+      // Lines are engineer-typed: match by master id when linked, else by name.
+      const line = lines.find(
+        (l) =>
+          (l.materialId && l.materialId === receipt.materialId) ||
+          (l.item && material && l.item.trim().toLowerCase() === material.name.trim().toLowerCase())
+      );
       if (line) {
         const others = await prisma.materialReceipt.aggregate({
           where: {

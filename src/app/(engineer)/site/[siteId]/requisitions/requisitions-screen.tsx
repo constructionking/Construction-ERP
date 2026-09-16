@@ -24,8 +24,24 @@ interface MaterialOpt {
   unit: string;
 }
 
-type MaterialLine = { materialId: string; qty: number; unit: string };
+// One item per line, typed by the engineer (needs differ site to site).
+type MaterialLine = {
+  item: string;
+  type: "material" | "tool" | "other";
+  qty: number;
+  unit: string;
+  materialId?: string; // older records linked to the material master
+};
 type FundLine = { head: string; amount: number };
+
+const LINE_TYPES: Array<{ key: MaterialLine["type"]; label: string; hint: string }> = [
+  { key: "material", label: "Material", hint: "e.g. Cement OPC 43, Coarse sand, 20 mm aggregate, TMT 12 mm" },
+  { key: "tool", label: "Tool / equipment", hint: "e.g. Concrete mixer (hire), Vibrator needle, Shovels, Wheelbarrow" },
+  { key: "other", label: "Other", hint: "e.g. Diesel, Curing compound, Binding wire, Safety helmets" },
+];
+const UNIT_SUGGESTIONS = ["bags", "cft", "cum", "kg", "ton", "nos", "litre", "mtr", "sqft", "sqm", "set", "days (hire)"];
+
+const emptyLine = (): MaterialLine => ({ item: "", type: "material", qty: 0, unit: "" });
 
 interface ReqItem {
   entityId: string;
@@ -135,7 +151,12 @@ export function RequisitionsScreen({
                   : (item.lines as MaterialLine[]).map((line, i) => (
                       <div key={i} className="flex justify-between text-sm">
                         <span className="text-slate-600">
-                          {materialById.get(line.materialId)?.name ?? "Material"}
+                          {line.item ??
+                            (line.materialId ? materialById.get(line.materialId)?.name : undefined) ??
+                            "Item"}
+                          {line.type && line.type !== "material" ? (
+                            <span className="ml-1 text-xs text-slate-400">({line.type})</span>
+                          ) : null}
                         </span>
                         <span className="font-medium">
                           {line.qty.toLocaleString("en-IN")} {line.unit}
@@ -185,8 +206,13 @@ function RequisitionForm({
   );
   const [materialLines, setMaterialLines] = useState<MaterialLine[]>(
     existing?.kind === "material"
-      ? (existing.lines as MaterialLine[])
-      : [{ materialId: "", qty: 0, unit: "" }]
+      ? (existing.lines as MaterialLine[]).map((l) => ({
+          ...l,
+          // Older records carried only a materialId — show its name as the item.
+          item: l.item ?? (l.materialId ? materials.find((m) => m.id === l.materialId)?.name ?? "" : ""),
+          type: l.type ?? "material",
+        }))
+      : [emptyLine()]
   );
   const [justification, setJustification] = useState(existing?.justification ?? "");
   const [neededBy, setNeededBy] = useState(existing?.neededBy ?? "");
@@ -204,7 +230,9 @@ function RequisitionForm({
       const lines =
         kind === "fund"
           ? fundLines.filter((l) => l.head.trim() && l.amount > 0)
-          : materialLines.filter((l) => l.materialId && l.qty > 0);
+          : materialLines
+              .filter((l) => l.item.trim() && l.qty > 0 && l.unit.trim())
+              .map((l) => ({ ...l, item: l.item.trim(), unit: l.unit.trim() }));
       const payload = {
         kind,
         lines,
@@ -303,52 +331,75 @@ function RequisitionForm({
               </Button>
             </div>
           ) : (
-            <div className="space-y-2">
-              {materialLines.map((line, i) => (
-                <div key={i} className="grid grid-cols-[1fr_100px] gap-2">
-                  <Select
-                    value={line.materialId}
-                    onChange={(e) => {
-                      const material = materials.find((m) => m.id === e.target.value);
-                      setMaterialLines((ls) =>
-                        ls.map((l, j) =>
-                          j === i
-                            ? { ...l, materialId: e.target.value, unit: material?.unit ?? "" }
-                            : l
-                        )
-                      );
-                    }}
-                  >
-                    <option value="">Material…</option>
-                    {materials.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name} ({m.unit})
-                      </option>
-                    ))}
-                  </Select>
-                  <Input
-                    type="number"
-                    inputMode="decimal"
-                    min="0.001"
-                    step="0.001"
-                    placeholder="Qty"
-                    value={line.qty || ""}
-                    onChange={(e) =>
-                      setMaterialLines((ls) =>
-                        ls.map((l, j) => (j === i ? { ...l, qty: Number(e.target.value) } : l))
-                      )
-                    }
-                  />
-                </div>
-              ))}
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() =>
-                  setMaterialLines((ls) => [...ls, { materialId: "", qty: 0, unit: "" }])
-                }
-              >
-                + Add line
+            <div className="space-y-3">
+              <p className="text-xs text-slate-500">
+                Type each item yourself — one item per line. Needs differ from site to site, so
+                there is no fixed list.
+              </p>
+              <datalist id="demand-units">
+                {UNIT_SUGGESTIONS.map((u) => (
+                  <option key={u} value={u} />
+                ))}
+              </datalist>
+              {materialLines.map((line, i) => {
+                const meta = LINE_TYPES.find((t) => t.key === line.type) ?? LINE_TYPES[0];
+                const update = (patch: Partial<MaterialLine>) =>
+                  setMaterialLines((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+                return (
+                  <div key={i} className="space-y-2 rounded-lg border border-slate-200 p-2.5">
+                    <div className="flex items-center gap-1">
+                      {LINE_TYPES.map((t) => (
+                        <button
+                          key={t.key}
+                          type="button"
+                          onClick={() => update({ type: t.key })}
+                          className={cn(
+                            "rounded-full px-2.5 py-1 text-xs font-medium",
+                            line.type === t.key ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-600"
+                          )}
+                        >
+                          {t.label}
+                        </button>
+                      ))}
+                      {materialLines.length > 1 ? (
+                        <button
+                          type="button"
+                          className="ml-auto text-xs text-red-600"
+                          onClick={() => setMaterialLines((ls) => ls.filter((_, j) => j !== i))}
+                        >
+                          remove
+                        </button>
+                      ) : null}
+                    </div>
+                    <Input
+                      placeholder={`${meta.label} name — ${meta.hint}`}
+                      value={line.item}
+                      onChange={(e) => update({ item: e.target.value })}
+                      maxLength={160}
+                    />
+                    <div className="grid grid-cols-[1fr_1fr] gap-2">
+                      <Input
+                        type="number"
+                        inputMode="decimal"
+                        min="0.001"
+                        step="0.001"
+                        placeholder="Qty"
+                        value={line.qty || ""}
+                        onChange={(e) => update({ qty: Number(e.target.value) })}
+                      />
+                      <Input
+                        list="demand-units"
+                        placeholder="Unit (bags, cft, nos…)"
+                        value={line.unit}
+                        onChange={(e) => update({ unit: e.target.value })}
+                        maxLength={20}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+              <Button type="button" variant="ghost" onClick={() => setMaterialLines((ls) => [...ls, emptyLine()])}>
+                + Add another item
               </Button>
             </div>
           )}

@@ -68,10 +68,16 @@ export const consumptionEntrySchema = z.object({
   entryDate: dateStr,
 });
 
+// Material DEMAND lines are typed by the engineer, one item per line — what a
+// site needs differs from site to site (tools, hire equipment, consumables),
+// so no master dropdown. `materialId` is an optional link to the material
+// master (kept for older records and for receipt-vs-request matching).
 export const materialLineSchema = z.object({
-  materialId: uuid,
-  qty: z.number().positive(),
-  unit: unitEnum,
+  item: z.string().trim().min(1).max(160),
+  type: z.enum(["material", "tool", "other"]).default("material"),
+  qty: z.number().positive().max(10_000_000),
+  unit: z.string().trim().min(1).max(20),
+  materialId: uuid.optional(),
 });
 
 export const fundLineSchema = z.object({
@@ -89,14 +95,14 @@ export const requisitionSchema = z
   })
   .superRefine((v, ctx) => {
     const isFundLines = v.lines.every((l) => "head" in l);
-    const isMaterialLines = v.lines.every((l) => "materialId" in l);
+    const isMaterialLines = v.lines.every((l) => "item" in l);
     if (v.kind === "fund" && !isFundLines) {
       ctx.addIssue({ code: "custom", message: "Fund requests need {head, amount} lines", path: ["lines"] });
     }
     if (v.kind === "material" && !isMaterialLines) {
       ctx.addIssue({
         code: "custom",
-        message: "Material requests need {materialId, qty, unit} lines",
+        message: "Material requests need {item, qty, unit} lines",
         path: ["lines"],
       });
     }

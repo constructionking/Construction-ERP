@@ -103,9 +103,11 @@ export default async function OwnerApprovalsPage({
                 raisedBy={userById.get(requisition.createdById) ?? "Engineer"}
                 createdAt={requisition.createdAt.toISOString()}
                 justification={requisition.justification}
-                lines={(requisition.lines as { materialId: string; qty: number; unit: string }[]).map(
+                lines={(requisition.lines as { item?: string; type?: string; materialId?: string; qty: number; unit: string }[]).map(
                   (line) => ({
-                    label: materialById.get(line.materialId) ?? "Material",
+                    label:
+                      (line.item ?? (line.materialId ? materialById.get(line.materialId) : undefined) ?? "Item") +
+                      (line.type && line.type !== "material" ? ` (${line.type})` : ""),
                     value: `${line.qty.toLocaleString("en-IN")} ${line.unit}`,
                   })
                 )}

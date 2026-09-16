@@ -12,9 +12,14 @@ export const POST = withApi(async (req: NextRequest) => {
   const ctx = await guard("requisition.create", { siteId: data.siteId });
 
   if (data.kind === "material") {
-    const ids = (data.lines as { materialId: string }[]).map((l) => l.materialId);
-    const count = await prisma.material.count({ where: { id: { in: ids } } });
-    if (count !== new Set(ids).size) throw new ApiError(400, "Unknown material in lines");
+    // Lines are free text; only those that link to the master are checked.
+    const ids = (data.lines as { materialId?: string }[])
+      .map((l) => l.materialId)
+      .filter((id): id is string => !!id);
+    if (ids.length > 0) {
+      const count = await prisma.material.count({ where: { id: { in: ids } } });
+      if (count !== new Set(ids).size) throw new ApiError(400, "Unknown material in lines");
+    }
   }
 
   const requisition = await prisma.requisition.create({

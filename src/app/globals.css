@@ -56,3 +56,45 @@ textarea,
 button {
   font-size: 16px; /* prevents iOS zoom-on-focus */
 }
+
+/* Bjork palette for components/ui/primitive-pagination.tsx. The engineer
+   navigation borrows its shape (pill track, 12px chips) in the app's own
+   slate + brand blue — see components/ui/pill-tabs.ts. No .dark class is
+   toggled anywhere yet; the dark block is ready for when it is. */
+:root {
+  --bjork-bg: #f7f3ea;
+  --bjork-surface: #fffcf6;
+  --bjork-surface-muted: rgba(250, 246, 237, 0.94);
+  --bjork-surface-hover: #f5efe3;
+  --bjork-surface-active: #efe7d8;
+  --bjork-text: #171717;
+  --bjork-text-strong: rgba(23, 23, 23, 0.9);
+  --bjork-text-medium: rgba(23, 23, 23, 0.72);
+  --bjork-text-muted: rgba(23, 23, 23, 0.52);
+  --bjork-text-soft: rgba(23, 23, 23, 0.36);
+  --bjork-text-faint: rgba(23, 23, 23, 0.22);
+  --bjork-border: #eee6db;
+  --bjork-border-muted: #f5ede2;
+  --bjork-border-strong: #e1d7c8;
+  --bjork-accent: #ec7d43;
+  --bjork-accent-hover: #f0935f;
+}
+
+.dark {
+  --bjork-bg: #111111;
+  --bjork-surface: #121212;
+  --bjork-surface-muted: rgba(22, 22, 22, 0.92);
+  --bjork-surface-hover: #161616;
+  --bjork-surface-active: #202020;
+  --bjork-text: #ededed;
+  --bjork-text-strong: rgba(237, 237, 237, 0.9);
+  --bjork-text-medium: rgba(237, 237, 237, 0.72);
+  --bjork-text-muted: rgba(237, 237, 237, 0.52);
+  --bjork-text-soft: rgba(237, 237, 237, 0.36);
+  --bjork-text-faint: rgba(237, 237, 237, 0.22);
+  --bjork-border: #232323;
+  --bjork-border-muted: #1c1c1c;
+  --bjork-border-strong: #343434;
+  --bjork-accent: #ec5c13;
+  --bjork-accent-hover: #f07832;
+}

@@ -23,6 +23,7 @@ import { ActivityPicker } from "@/components/ActivityPicker";
 import { GuidedCapture } from "@/components/GuidedCapture";
 import { STEEL_DIAMETERS_MM, STANDARD_BAR_LENGTH_M, steelWeightKg } from "@/lib/telemetry/steel";
 import { cn } from "@/lib/cn";
+import { pillItem, pillTrack } from "@/components/ui/pill-tabs";
 
 interface MaterialOpt {
   id: string;
@@ -126,15 +127,15 @@ export function InventoryTabs(props: {
 
   return (
     <div className="space-y-4">
-      <div className="flex rounded-lg bg-slate-200/70 p-1">
+      <div role="tablist" aria-label="Stock sections" className={cn(pillTrack(), "flex gap-1")}>
         {TABS.map((t) => (
           <button
             key={t}
+            type="button"
+            role="tab"
+            aria-selected={tab === t}
             onClick={() => setTab(t)}
-            className={cn(
-              "flex-1 rounded-md py-1.5 text-sm font-medium transition-colors",
-              tab === t ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"
-            )}
+            className={cn(pillItem({ active: tab === t }), "h-10 flex-1 text-sm")}
           >
             {t}
           </button>

@@ -1,46 +1,63 @@
 "use client";
 
 // Draggable draft-schedule editor for the pre-lock review step. The owner
-// drags a bar to MOVE an activity, or its end handles to STRETCH/SHORTEN it;
-// the date inputs beside the chart share the same state and update live.
-// This edits the DRAFT only — locking still goes through the baseline API,
-// and locked baselines remain immutable.
+// drags a bar to MOVE an activity, or its end handles to STRETCH/SHORTEN it.
+// While dragging, the bar stays put (faded) and a ghost shows where it will
+// land, snapped to whole days, with the new dates pinned at the top of the
+// chart and a drop region across every row; release commits, Esc cancels.
+// Keyboard: focus a bar or handle, Space to pick up, ←/→ a day at a time,
+// Space to drop. This edits the DRAFT only — locking still goes through the
+// baseline API, and locked baselines remain immutable.
 
-import React, { useRef } from "react";
+import * as React from "react";
+import { useId, useMemo, useRef, useState } from "react";
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  useDraggable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragMoveEvent,
+  type DragStartEvent,
+  type KeyboardCoordinateGetter,
+  type Modifier,
+} from "@dnd-kit/core";
+import { GripVertical } from "lucide-react";
+import { cn } from "@/lib/utils";
+import {
+  chartRange,
+  fmtDay,
+  overlapsMonsoon,
+  previewRange,
+  snapDays,
+  spanDays,
+  type DragMode,
+} from "./dates";
+import {
+  ScheduleBar,
+  ScheduleHeader,
+  ScheduleRow,
+  ScheduleTimelineProvider,
+  ScheduleViewport,
+  ScheduleZoom,
+  useScheduleTimeline,
+  type ScheduleGuide,
+} from "./schedule-timeline";
 
 export type EditorRow =
   | { kind: "heading"; label: string }
   | { kind: "item"; id: string; label: string };
 
-const ROW_H = 30;
-const BAR_H = 14;
-const LABEL_W = 230;
-const HEADER_H = 30;
-const HANDLE_W = 7;
-
-const INK = "#1a2233";
-const INK_MUTED = "#64748b";
-const GRID = "#e2e8f0";
-const BAR_FILL = "#7fa8d9";
-const BAR_STROKE = "#2a78d6";
-const MONSOON_BAND = "rgba(35, 121, 221, 0.07)";
-
-function dayIndex(iso: string, originIso: string): number {
-  return Math.round((new Date(iso).getTime() - new Date(originIso).getTime()) / 86_400_000);
-}
-function addDays(iso: string, days: number): string {
-  const d = new Date(iso);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
-}
+type Range = { start: string; end: string };
 
 interface DragState {
   id: string;
-  mode: "move" | "start" | "end";
-  originClientX: number;
-  origStart: string;
-  origEnd: string;
-  clientPxPerDay: number;
+  mode: DragMode;
+  orig: Range;
+  preview: Range;
+  invalidReason: string | null;
 }
 
 export function GanttEditor({
@@ -48,226 +65,369 @@ export function GanttEditor({
   dates,
   onChange,
   monsoonMonths = [6, 7, 8, 9],
-  width = 980,
+  todayIso = null,
+  minStartIso = null,
+  snapIntervalDays = 1,
 }: {
   rows: EditorRow[];
-  dates: Record<string, { start: string; end: string }>;
+  dates: Record<string, Range>;
   onChange: (id: string, start: string, end: string) => void;
   monsoonMonths?: number[];
-  width?: number;
+  todayIso?: string | null;
+  /** Project start: a drag may not pull an activity earlier than this. */
+  minStartIso?: string | null;
+  snapIntervalDays?: number;
 }) {
-  const svgRef = useRef<SVGSVGElement | null>(null);
-  const dragRef = useRef<DragState | null>(null);
+  const [zoom, setZoom] = useState(1);
 
-  const items = rows.filter((r): r is Extract<EditorRow, { kind: "item" }> => r.kind === "item");
-  const valid = items.filter((r) => dates[r.id]?.start && dates[r.id]?.end);
-  if (valid.length === 0) return null;
+  // Generous padding so ordinary drags have room on both sides; the range
+  // only re-fits after a drop, never mid-gesture.
+  const range = useMemo(
+    () =>
+      chartRange(
+        rows.flatMap((r) => (r.kind === "item" && dates[r.id] ? [dates[r.id]] : [])),
+        14,
+        21,
+      ),
+    [rows, dates],
+  );
+  if (!range) return null;
 
-  // Generous padding so ordinary drags don't rescale the chart mid-gesture.
-  let minIso = dates[valid[0].id].start;
-  let maxIso = dates[valid[0].id].end;
-  for (const r of valid) {
-    if (dates[r.id].start < minIso) minIso = dates[r.id].start;
-    if (dates[r.id].end > maxIso) maxIso = dates[r.id].end;
-  }
-  minIso = addDays(minIso, -14);
-  maxIso = addDays(maxIso, 21);
-  const totalDays = Math.max(1, dayIndex(maxIso, minIso));
-  const plotW = width - LABEL_W - 16;
-  const dayW = plotW / totalDays;
-  const x = (iso: string) =>
-    LABEL_W + Math.min(Math.max(dayIndex(iso, minIso), 0), totalDays) * dayW;
-  const height = HEADER_H + rows.length * ROW_H + 8;
-
-  // Month grid (ticks only for months inside the range — see GanttSvg).
-  const months: { startIso: string; endIso: string; label: string; monsoon: boolean }[] = [];
-  {
-    const cursor = new Date(minIso);
-    cursor.setUTCDate(1);
-    while (cursor.toISOString().slice(0, 10) <= maxIso) {
-      const startIso = cursor.toISOString().slice(0, 10);
-      const next = new Date(cursor);
-      next.setUTCMonth(next.getUTCMonth() + 1);
-      months.push({
-        startIso,
-        endIso: next.toISOString().slice(0, 10) > maxIso ? maxIso : next.toISOString().slice(0, 10),
-        label: new Date(startIso).toLocaleDateString("en-IN", { month: "short", year: "2-digit" }),
-        monsoon: monsoonMonths.includes(cursor.getUTCMonth() + 1),
-      });
-      cursor.setUTCMonth(cursor.getUTCMonth() + 1);
-    }
-  }
-
-  function beginDrag(e: React.PointerEvent, id: string, mode: DragState["mode"]) {
-    const d = dates[id];
-    const svg = svgRef.current;
-    if (!d || !svg) return;
-    const rect = svg.getBoundingClientRect();
-    dragRef.current = {
-      id,
-      mode,
-      originClientX: e.clientX,
-      origStart: d.start,
-      origEnd: d.end,
-      clientPxPerDay: (rect.width / width) * dayW,
-    };
-    svg.setPointerCapture(e.pointerId);
-    e.preventDefault();
-  }
-
-  function onMove(e: React.PointerEvent) {
-    const drag = dragRef.current;
-    if (!drag || drag.clientPxPerDay <= 0) return;
-    const delta = Math.round((e.clientX - drag.originClientX) / drag.clientPxPerDay);
-    let start = drag.origStart;
-    let end = drag.origEnd;
-    if (drag.mode === "move") {
-      start = addDays(drag.origStart, delta);
-      end = addDays(drag.origEnd, delta);
-    } else if (drag.mode === "start") {
-      start = addDays(drag.origStart, delta);
-      if (start > end) start = end;
-    } else {
-      end = addDays(drag.origEnd, delta);
-      if (end < start) end = start;
-    }
-    const current = dates[drag.id];
-    if (current && (current.start !== start || current.end !== end)) {
-      onChange(drag.id, start, end);
-    }
-  }
-
-  function endDrag(e: React.PointerEvent) {
-    if (dragRef.current && svgRef.current) {
-      svgRef.current.releasePointerCapture(e.pointerId);
-    }
-    dragRef.current = null;
-  }
-
-  let rowIndex = -1;
   return (
-    <svg
-      ref={svgRef}
-      viewBox={`0 0 ${width} ${height}`}
-      width="100%"
-      role="application"
-      aria-label="Draft schedule editor: drag bars to move, drag their edges to resize"
-      style={{ fontFamily: "inherit", touchAction: "none", userSelect: "none" }}
-      onPointerMove={onMove}
-      onPointerUp={endDrag}
-      onPointerCancel={endDrag}
+    <ScheduleTimelineProvider
+      startIso={range.startIso}
+      endIso={range.endIso}
+      todayIso={todayIso}
+      monsoonMonths={monsoonMonths}
+      zoom={zoom}
+      className="space-y-2"
     >
-      {months.map((month, i) => (
-        <g key={i}>
-          {month.monsoon ? (
-            <rect
-              x={x(month.startIso)}
-              y={HEADER_H - 4}
-              width={Math.max(0, x(month.endIso) - x(month.startIso))}
-              height={rows.length * ROW_H + 4}
-              fill={MONSOON_BAND}
-            />
-          ) : null}
-          {month.startIso >= minIso ? (
-            <line
-              x1={x(month.startIso)}
-              x2={x(month.startIso)}
-              y1={HEADER_H - 4}
-              y2={HEADER_H + rows.length * ROW_H}
-              stroke={GRID}
-              strokeWidth={1}
-            />
-          ) : null}
-          {month.startIso >= minIso && x(month.startIso) + 4 < width - 52 ? (
-            <text x={x(month.startIso) + 4} y={HEADER_H - 10} fontSize={11} fill={INK_MUTED}>
-              {month.label}
-              {month.monsoon ? " ☔" : ""}
-            </text>
-          ) : null}
-        </g>
-      ))}
+      <ScheduleZoom zoom={zoom} onZoomChange={setZoom} />
+      <EditorCanvas
+        rows={rows}
+        dates={dates}
+        onChange={onChange}
+        monsoonMonths={monsoonMonths}
+        minStartIso={minStartIso}
+        snapIntervalDays={snapIntervalDays}
+      />
+    </ScheduleTimelineProvider>
+  );
+}
 
-      {rows.map((row, i) => {
-        rowIndex += 1;
-        const y = HEADER_H + rowIndex * ROW_H;
-        if (row.kind === "heading") {
-          return (
-            <g key={`h-${i}`}>
-              <rect x={0} y={y} width={width} height={ROW_H} fill="#eef2f7" />
-              <text x={8} y={y + ROW_H / 2 + 4} fontSize={12} fontWeight={700} fill={INK}>
-                {row.label.slice(0, 34)}
-              </text>
-            </g>
-          );
-        }
-        const d = dates[row.id];
-        if (!d?.start || !d?.end) return null;
-        const barY = y + (ROW_H - BAR_H) / 2;
-        const x1 = x(d.start);
-        const x2 = x(addDays(d.end, 1));
-        const barW = Math.max(dayW, x2 - x1);
-        const days = dayIndex(d.end, d.start) + 1;
-        return (
-          <g key={row.id}>
-            <title>{`${row.label}\n${d.start} → ${d.end} (${days}d)\nDrag to move · drag an edge to resize`}</title>
-            {rowIndex % 2 === 1 ? (
-              // Translucent so the monsoon band stays visible beneath.
-              <rect x={0} y={y} width={width} height={ROW_H} fill="rgba(15, 23, 42, 0.025)" />
-            ) : null}
-            <text x={16} y={y + ROW_H / 2 + 4} fontSize={11} fontWeight={600} fill={INK}>
-              {row.label.slice(0, 32)}
-            </text>
-            {/* bar: drag = move */}
-            <rect
-              x={x1}
-              y={barY}
-              width={barW}
-              height={BAR_H}
-              rx={4}
-              fill={BAR_FILL}
-              stroke={BAR_STROKE}
-              strokeWidth={1}
-              style={{ cursor: "grab" }}
-              onPointerDown={(e) => beginDrag(e, row.id, "move")}
-            />
-            {/* duration label when the bar is wide enough */}
-            {barW > 42 ? (
-              <text
-                x={x1 + barW / 2}
-                y={barY + BAR_H - 3}
-                fontSize={9.5}
-                fontWeight={600}
-                fill="#0f2f56"
-                textAnchor="middle"
-                style={{ pointerEvents: "none" }}
+/* Snap the visual drag to whole days and lock it to the time axis. */
+function useModifiers(pxPerDay: number, snapInterval: number): Modifier[] {
+  return useMemo(() => {
+    const step = pxPerDay * Math.max(1, snapInterval);
+    const horizontalSnap: Modifier = ({ transform }) => ({
+      ...transform,
+      x: step > 0 ? Math.round(transform.x / step) * step : transform.x,
+      y: 0,
+    });
+    return [horizontalSnap];
+  }, [pxPerDay, snapInterval]);
+}
+
+function EditorCanvas({
+  rows,
+  dates,
+  onChange,
+  monsoonMonths,
+  minStartIso,
+  snapIntervalDays,
+}: {
+  rows: EditorRow[];
+  dates: Record<string, Range>;
+  onChange: (id: string, start: string, end: string) => void;
+  monsoonMonths: number[];
+  minStartIso: string | null;
+  snapIntervalDays: number;
+}) {
+  const { pxPerDay } = useScheduleTimeline();
+  const [drag, setDrag] = useState<DragState | null>(null);
+  // Stable id keeps dnd-kit's aria-describedby identical on server and client.
+  const dndId = useId();
+  const labelOf = (id: string) => {
+    const row = rows.find((r) => r.kind === "item" && r.id === id);
+    return row && row.kind === "item" ? row.label : "activity";
+  };
+  const describe = (event: { active: { data: { current?: unknown } } }) => {
+    const data = event.active.data.current as { activityId: string; mode: DragMode } | undefined;
+    if (!data) return "activity";
+    const what = data.mode === "move" ? "" : data.mode === "start" ? "start of " : "end of ";
+    return what + labelOf(data.activityId);
+  };
+
+  // The keyboard sensor reads the CURRENT scale, even after zooming.
+  const stepRef = useRef(pxPerDay * snapIntervalDays);
+  stepRef.current = pxPerDay * snapIntervalDays;
+  const keyboardCoordinates: KeyboardCoordinateGetter = (event, { currentCoordinates }) => {
+    if (event.code === "ArrowRight" || event.code === "ArrowLeft") {
+      event.preventDefault();
+      const dir = event.code === "ArrowRight" ? 1 : -1;
+      return { ...currentCoordinates, x: currentCoordinates.x + dir * stepRef.current };
+    }
+    return undefined;
+  };
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: keyboardCoordinates }),
+  );
+  const modifiers = useModifiers(pxPerDay, snapIntervalDays);
+
+  const validate = (orig: Range, next: Range): string | null => {
+    // Only block moves that make things worse: a bar already sitting before
+    // the project start (e.g. the start field changed after modelling) can
+    // still be dragged later.
+    if (minStartIso && next.start < minStartIso && next.start < orig.start) {
+      return `Before project start (${fmtDay(minStartIso)})`;
+    }
+    return null;
+  };
+
+  const compute = (id: string, mode: DragMode, deltaPx: number): DragState | null => {
+    const orig = dates[id];
+    if (!orig || pxPerDay <= 0) return null;
+    const deltaDays = snapDays(deltaPx / pxPerDay, snapIntervalDays);
+    const preview = previewRange(orig, mode, deltaDays);
+    return { id, mode, orig, preview, invalidReason: validate(orig, preview) };
+  };
+
+  const dragData = (event: DragStartEvent | DragMoveEvent | DragEndEvent) =>
+    event.active.data.current as { activityId: string; mode: DragMode } | undefined;
+
+  const onDragStart = (event: DragStartEvent) => {
+    const data = dragData(event);
+    if (data) setDrag(compute(data.activityId, data.mode, 0));
+  };
+  const onDragMove = (event: DragMoveEvent) => {
+    const data = dragData(event);
+    if (!data) return;
+    const next = compute(data.activityId, data.mode, event.delta.x);
+    setDrag((prev) =>
+      prev &&
+      next &&
+      prev.preview.start === next.preview.start &&
+      prev.preview.end === next.preview.end
+        ? prev // same snapped day — skip the re-render
+        : next,
+    );
+  };
+  const onDragEnd = (event: DragEndEvent) => {
+    const data = dragData(event);
+    setDrag(null);
+    if (!data) return;
+    const result = compute(data.activityId, data.mode, event.delta.x);
+    if (!result || result.invalidReason) return;
+    if (result.preview.start !== result.orig.start || result.preview.end !== result.orig.end) {
+      onChange(data.activityId, result.preview.start, result.preview.end);
+    }
+  };
+
+  const guide: ScheduleGuide | null = drag
+    ? {
+        startIso: drag.preview.start,
+        endIso: drag.preview.end,
+        tone: drag.invalidReason ? "invalid" : "valid",
+        label: drag.invalidReason ?? (
+          <>
+            {fmtDay(drag.preview.start)} → {fmtDay(drag.preview.end)} ·{" "}
+            {spanDays(drag.preview.start, drag.preview.end)}d
+            {overlapsMonsoon(drag.preview.start, drag.preview.end, monsoonMonths) ? " ☔" : ""}
+          </>
+        ),
+      }
+    : null;
+
+  // Main-activity headings show the derived span of the items under them.
+  const headingSpans = useMemo(() => {
+    const spans = new Map<number, Range>();
+    let current = -1;
+    rows.forEach((row, i) => {
+      if (row.kind === "heading") {
+        current = i;
+        return;
+      }
+      const d = dates[row.id];
+      if (current < 0 || !d?.start || !d?.end) return;
+      const span = spans.get(current);
+      spans.set(current, {
+        start: !span || d.start < span.start ? d.start : span.start,
+        end: !span || d.end > span.end ? d.end : span.end,
+      });
+    });
+    return spans;
+  }, [rows, dates]);
+
+  return (
+    <DndContext
+      id={dndId}
+      sensors={sensors}
+      modifiers={modifiers}
+      onDragStart={onDragStart}
+      onDragMove={onDragMove}
+      onDragEnd={onDragEnd}
+      onDragCancel={() => setDrag(null)}
+      accessibility={{
+        screenReaderInstructions: {
+          draggable:
+            "To reschedule, press space to pick up the bar, use the left and right arrow keys to move it a day at a time, then press space to drop or escape to cancel.",
+        },
+        announcements: {
+          onDragStart: (e) => `Picked up ${describe(e)}.`,
+          onDragOver: () => undefined,
+          onDragMove: () =>
+            drag
+              ? drag.invalidReason ??
+                `${fmtDay(drag.preview.start)} to ${fmtDay(drag.preview.end)}, ${spanDays(drag.preview.start, drag.preview.end)} days.`
+              : undefined,
+          onDragEnd: (e) => `Dropped ${describe(e)}.`,
+          onDragCancel: (e) => `Cancelled. ${describe(e)} keeps its dates.`,
+        },
+      }}
+    >
+      <ScheduleViewport
+        guide={guide}
+        hoverEnabled={!drag}
+        role="application"
+        aria-label="Draft schedule editor: drag bars to move, drag their edges to resize"
+      >
+        <ScheduleHeader columnLabel="Activity" />
+        {rows.map((row, i) => {
+          if (row.kind === "heading") {
+            const span = headingSpans.get(i);
+            return (
+              <ScheduleRow
+                key={`h-${i}`}
+                variant="group"
+                label={
+                  <span className="truncate text-sm font-semibold text-slate-900" title={row.label}>
+                    {row.label}
+                  </span>
+                }
               >
-                {days}d
-              </text>
-            ) : null}
-            {/* edge handles: drag = resize */}
-            <rect
-              x={x1 - HANDLE_W / 2}
-              y={barY - 2}
-              width={HANDLE_W}
-              height={BAR_H + 4}
-              rx={2}
-              fill={BAR_STROKE}
-              style={{ cursor: "ew-resize" }}
-              onPointerDown={(e) => beginDrag(e, row.id, "start")}
-            />
-            <rect
-              x={x1 + barW - HANDLE_W / 2}
-              y={barY - 2}
-              width={HANDLE_W}
-              height={BAR_H + 4}
-              rx={2}
-              fill={BAR_STROKE}
-              style={{ cursor: "ew-resize" }}
-              onPointerDown={(e) => beginDrag(e, row.id, "end")}
-            />
-          </g>
-        );
-      })}
-    </svg>
+                {span ? (
+                  <ScheduleBar
+                    start={span.start}
+                    end={span.end}
+                    className="top-1/2 z-[5] h-2 -translate-y-1/2 rounded-full bg-slate-400/70"
+                    title={`${row.label}\n${span.start} → ${span.end} (${spanDays(span.start, span.end)}d)`}
+                  />
+                ) : null}
+              </ScheduleRow>
+            );
+          }
+          const d = dates[row.id];
+          return (
+            <ScheduleRow
+              key={row.id}
+              label={
+                <span className="truncate pl-3 text-xs font-medium text-slate-800" title={row.label}>
+                  {row.label}
+                </span>
+              }
+            >
+              {d?.start && d?.end ? (
+                <EditableBar
+                  id={row.id}
+                  label={row.label}
+                  range={d}
+                  active={drag?.id === row.id ? drag : null}
+                />
+              ) : null}
+            </ScheduleRow>
+          );
+        })}
+      </ScheduleViewport>
+      <p className="px-1 text-xs text-slate-500">
+        Snaps to whole days · the dates in the table below follow on release · Esc cancels a drag ·
+        keyboard: focus a bar, Space, ←/→, Space.
+      </p>
+    </DndContext>
+  );
+}
+
+function EditableBar({
+  id,
+  label,
+  range,
+  active,
+}: {
+  id: string;
+  label: string;
+  range: Range;
+  active: DragState | null;
+}) {
+  const move = useDraggable({ id: `${id}:move`, data: { activityId: id, mode: "move" } });
+  const start = useDraggable({ id: `${id}:start`, data: { activityId: id, mode: "start" } });
+  const end = useDraggable({ id: `${id}:end`, data: { activityId: id, mode: "end" } });
+  const days = spanDays(range.start, range.end);
+  const dragging = active !== null;
+  const invalid = active?.invalidReason != null;
+
+  return (
+    <>
+      <ScheduleBar
+        ref={move.setNodeRef}
+        start={range.start}
+        end={range.end}
+        minWidth={14}
+        data-state={dragging ? "dragging" : "idle"}
+        className={cn(
+          "group/bar top-1/2 z-[5] flex h-5 -translate-y-1/2 cursor-grab items-center justify-center rounded-md border border-brand-600 bg-brand-300 text-[10px] font-semibold text-brand-950 shadow-sm outline-none transition-[opacity,box-shadow] active:cursor-grabbing",
+          "hover:shadow-md focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1",
+          dragging && "opacity-40 shadow-none",
+        )}
+        style={{ touchAction: "none" }}
+        title={`${label}\n${range.start} → ${range.end} (${days}d)\nDrag to move · drag an edge to resize`}
+        {...move.listeners}
+        {...move.attributes}
+        aria-label={`Move ${label}, ${range.start} to ${range.end}`}
+      >
+        <span className="pointer-events-none truncate px-2">{days}d</span>
+
+        {/* edge handles: drag = stretch / shorten */}
+        {(["start", "end"] as const).map((edge) => {
+          const handle = edge === "start" ? start : end;
+          return (
+            <span
+              key={edge}
+              ref={handle.setNodeRef}
+              {...handle.listeners}
+              {...handle.attributes}
+              aria-label={`${edge === "start" ? "Change start of" : "Change end of"} ${label} (${edge === "start" ? range.start : range.end})`}
+              className={cn(
+                "absolute inset-y-[-3px] flex w-2.5 cursor-ew-resize items-center justify-center rounded-sm bg-brand-600 text-white outline-none",
+                "opacity-70 transition-opacity group-hover/bar:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-brand-500",
+                edge === "start" ? "-left-1" : "-right-1",
+              )}
+              style={{ touchAction: "none" }}
+              onPointerDown={(e) => {
+                e.stopPropagation(); // don't also start a "move" on the bar
+                handle.listeners?.onPointerDown?.(e);
+              }}
+            >
+              <GripVertical className="h-3 w-3" aria-hidden />
+            </span>
+          );
+        })}
+      </ScheduleBar>
+
+      {/* drop ghost: where the bar lands if released now */}
+      {active ? (
+        <ScheduleBar
+          start={active.preview.start}
+          end={active.preview.end}
+          minWidth={14}
+          data-slot="schedule-drop-ghost"
+          data-state={invalid ? "invalid" : "valid"}
+          className={cn(
+            "pointer-events-none top-1/2 z-[7] h-5 -translate-y-1/2 rounded-md border-2 border-dashed",
+            invalid ? "border-red-500 bg-red-500/15" : "border-brand-600 bg-brand-500/25",
+          )}
+          aria-hidden
+        />
+      ) : null}
+    </>
   );
 }

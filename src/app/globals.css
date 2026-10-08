@@ -18,6 +18,26 @@
 
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;
+
+  /* shadcn semantic tokens (components under src/components/ui/ use
+     bg-background, text-muted-foreground, …), mapped onto this palette.
+     Accent is the brand colour so hover/drag indicators read clearly. */
+  --color-background: #ffffff;
+  --color-foreground: var(--color-ink);
+  --color-card: #ffffff;
+  --color-card-foreground: var(--color-ink);
+  --color-primary: var(--color-brand-600);
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #e2e8f0;
+  --color-secondary-foreground: var(--color-ink);
+  --color-muted: #f1f5f9;
+  --color-muted-foreground: #64748b;
+  --color-accent: var(--color-brand-600);
+  --color-accent-foreground: #ffffff;
+  --color-destructive: #dc2626;
+  --color-border: #e2e8f0;
+  --color-input: #cbd5e1;
+  --color-ring: var(--color-brand-500);
 }
 
 html {

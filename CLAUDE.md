@@ -34,7 +34,10 @@ scheduling). Three Phase-1 roles with strict limited access:
 ## Stack & layout
 
 Next.js 15 App Router + TS, Tailwind v4 (in-house UI kit at
-`src/components/ui.tsx`), Prisma + PostgreSQL 16, custom JWT auth
+`src/components/ui.tsx`; shadcn-style components live in `src/components/ui/`
+— `components.json` is set up for the shadcn CLI, `cn` re-exported from
+`@/lib/utils`, semantic tokens in `globals.css`; Gantt views compose the
+day-scale primitives in `src/components/gantt/schedule-timeline.tsx`), Prisma + PostgreSQL 16, custom JWT auth
 (jose, httpOnly cookie; token carries userId only — roles are re-read from DB
 in `guard()`), pg-boss jobs (Node worker `src/worker/index.ts`), Python
 photogrammetry worker (`worker-photogrammetry/`, polls `scan_jobs` with

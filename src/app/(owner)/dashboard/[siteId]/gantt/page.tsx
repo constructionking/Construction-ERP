@@ -3,8 +3,7 @@ import { requireSiteRolePage } from "@/lib/auth/page-guard";
 import { getCurrentBaseline } from "@/lib/schedule/service";
 import { businessDateIST, dateOnly } from "@/lib/versioning/day-close";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui";
-import { type GanttRow } from "@/components/gantt/GanttSvg";
-import { GanttChart, type GanttGroup } from "@/components/gantt/GanttChart";
+import { GanttChart, type GanttGroup, type GanttRow } from "@/components/gantt/GanttChart";
 import { ScheduleReview } from "./schedule-review";
 
 export default async function GanttPage({ params }: { params: Promise<{ siteId: string }> }) {

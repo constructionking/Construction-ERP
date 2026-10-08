@@ -193,9 +193,8 @@ export function ScheduleReview({
         {reviewing ? (
           <div className="space-y-2">
             <div className="rounded-lg border border-slate-200 p-2">
-              <p className="mb-1 px-1 text-xs text-slate-500">
+              <p className="mb-2 px-1 text-xs text-slate-500">
                 Drag a bar to move the whole activity · drag its edge to stretch or shorten it.
-                The dates in the table below follow along.
               </p>
               <GanttEditor
                 rows={activities
@@ -210,6 +209,8 @@ export function ScheduleReview({
                       : { kind: "item", id: a.id, label: `${a.code} ${a.name}` }
                   )}
                 dates={dates}
+                todayIso={todayIST()}
+                minStartIso={startDate || null}
                 onChange={(id, start, end) =>
                   setDates((d) => ({ ...d, [id]: { start, end } }))
                 }
